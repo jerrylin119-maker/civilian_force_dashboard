@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 app.py - 民力科業務知識動態看板
-Streamlit 主程式：5大業務分類分頁、前台查閱、紅字異動醒目提示、Excel式在線編輯、補捐助進度管制
+Streamlit 主程式：專業義消承辦人情境導引、5大業務分類分頁、前台查閱、紅字異動醒目提示、Excel式在線編輯
 """
 
 import streamlit as st
@@ -43,6 +43,46 @@ st.markdown("""
         color: #e0e7ff;
         font-size: 0.95rem;
         margin-bottom: 0;
+    }
+
+    /* 專業義消承辦人情境引導卡片 */
+    .guide-card {
+        background: #ffffff;
+        border: 1px solid #e0e7ff;
+        border-radius: 12px;
+        padding: 1.4rem 1.6rem;
+        margin-bottom: 1.4rem;
+        box-shadow: 0 4px 12px rgba(30, 58, 138, 0.06);
+        border-left: 6px solid #2563eb;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .guide-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(30, 58, 138, 0.12);
+    }
+    .guide-card-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 0.8rem;
+    }
+    .guide-icon {
+        font-size: 1.6rem;
+        margin-right: 0.75rem;
+    }
+    .guide-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #1e3a8a;
+    }
+    .guide-target-badge {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        color: #1d4ed8;
+        padding: 0.2rem 0.6rem;
+        border-radius: 9999px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin-left: 0.6rem;
     }
 
     /* KPI 卡片 */
@@ -187,7 +227,7 @@ st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between;">
         <div>
             <h1>🚒 民力科業務知識動態看板</h1>
-            <p>Civilian & Volunteer Force Division Management & Knowledge Portal | 業務知識傳承 • 最新異動醒目提示 • 隨時雲端更新</p>
+            <p>Civilian & Volunteer Force Division Management & Knowledge Portal | 專業義消承辦人導引 • 最新異動醒目提示 • 隨時雲端更新</p>
         </div>
         <div style="text-align: right; font-size: 0.85rem; opacity: 0.9;">
             📅 資料庫狀態：<strong>已連線</strong><br>
@@ -387,9 +427,9 @@ def render_task_card(task):
             render_doc_links(task["doc_links"])
 
 
-# 5 大分類分頁 + 全域總覽 + 後台管理
+# 頁面分頁設計：以「專業義消承辦人」為首要情境導引
 tab_names = [
-    "📊 全部總覽",
+    "🎖️ 專業義消承辦人",
     "🚒 義消業務",
     "🎁 義消福利",
     "💰 補捐助業務",
@@ -403,40 +443,116 @@ if st.session_state["is_admin"]:
 tabs = st.tabs(tab_names)
 
 
-# === 1. 全部總覽 Tab ===
+# === 1. 專業義消承辦人 Tab ===
 with tabs[0]:
-    st.markdown("### 📊 民力科全域業務推動總覽與最新動態")
-    
-    # 最新異動宣導布告欄
-    highlight_tasks = db.get_tasks_by_filter(only_highlight=True)
-    if highlight_tasks:
-        with st.container():
-            st.markdown(f"""
-            <div style="background: #fff1f2; border: 1px solid #fecdd3; border-radius: 8px; padding: 1rem 1.2rem; margin-bottom: 1.5rem;">
-                <h4 style="color: #be123c; margin-top: 0; margin-bottom: 0.5rem;">📢 最新異動 / 重要政策宣導即時通報 ({len(highlight_tasks)} 則)</h4>
-                <p style="font-size: 0.9rem; color: #881337; margin-bottom: 0.6rem;">科內近期有期程變動或法規修正之業務項目如下：</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            for h_task in highlight_tasks:
-                st.markdown(f"- **【{h_task['category']} - {h_task['title']}】**（承辦：**{h_task['owner']}**）<br>&nbsp;&nbsp;👉 <span style='color:#dc2626;font-weight:600;'>{h_task['update_highlight']}</span>", unsafe_allow_html=True)
-            st.markdown("---")
+    st.markdown("""
+    <div style="background: linear-gradient(to right, #eff6ff, #f8fafc); border: 1px solid #bfdbfe; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.5rem;">
+        <h3 style="color: #1e3a8a; margin-top: 0; margin-bottom: 0.4rem;">🎖️ 專業義消承辦人 — 四大實務情境作業導航</h3>
+        <p style="color: #475569; font-size: 0.95rem; margin-bottom: 0;">
+            專為分隊與科內義消承辦人量身打造之實務情境導引，依序整合第一線最常處理的「人員名冊、福利諮詢、救災協勤、活動補助」核心資源與作業系統。
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # 依篩選條件展示全部業務
-    tasks_all = db.get_tasks_by_filter(
-        category=None,
-        owner=selected_owner,
-        status=selected_status,
-        search_query=search_query,
-        only_highlight=only_highlight
-    )
-    
-    st.write(f"目前篩選條件下共有 **{len(tasks_all)}** 項業務：")
-    if not tasks_all:
-        st.warning("查無符合條件之業務項目。")
-    else:
-        for t in tasks_all:
-            render_task_card(t)
+    # 取得關聯任務資料
+    all_tasks_dict = {t["title"]: t for t in db.get_tasks_by_filter()}
+
+    # 情境 1: 我的分隊義消是誰
+    st.markdown("""
+    <div class="guide-card">
+        <div class="guide-card-header">
+            <span class="guide-icon">👥</span>
+            <div>
+                <span class="guide-title">1. 我的分隊義消是誰？</span>
+                <span class="guide-target-badge">連結業務：義消專長資料庫定期維護</span>
+            </div>
+        </div>
+        <p style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
+            📌 <strong>情境說明</strong>：新任承辦人或需要清查轄內分隊義消弟兄姊妹編組、專長分類（救護、水域、山搜、無人機、火搶）及證照效期時，請透過義消專長資料庫進行人員名冊查閱與定期維護。
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    task_1 = all_tasks_dict.get("義消專長資料庫定期維護")
+    if task_1:
+        render_task_card(task_1)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # 情境 2: 義消問我有什麼福利
+    st.markdown("""
+    <div class="guide-card">
+        <div class="guide-card-header">
+            <span class="guide-icon">🎁</span>
+            <div>
+                <span class="guide-title">2. 義消問我有什麼福利？</span>
+                <span class="guide-target-badge">連結業務：義消福利大項 (保險互助 / 出勤費 / 獎學金 / 健檢專案)</span>
+            </div>
+        </div>
+        <p style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
+            📌 <strong>情境說明</strong>：義消隊員詢問有哪些福利保障時，承辦人可依下列四大項福利政策向同仁說明並協助申辦：
+            <br>• <strong>團體保險與福利互助</strong>（傷病醫療、失能住院）：透過線上管制系統申辦
+            <br>• <strong>協勤出勤費與誤餐費</strong>：依救災派遣系統紀錄申領
+            <br>• <strong>義消子女獎學金</strong>：每學期依成績申請
+            <br>• <strong>健康檢查補助</strong>：★ 預計 116 年推動實施，每年提供 300 位名額
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    welfare_tasks = db.get_tasks_by_filter(category="義消福利")
+    for wt in welfare_tasks:
+        render_task_card(wt)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # 情境 3: 義消出勤協助救災
+    st.markdown("""
+    <div class="guide-card">
+        <div class="guide-card-header">
+            <span class="guide-icon">🚒</span>
+            <div>
+                <span class="guide-title">3. 義消出勤協助救災</span>
+                <span class="guide-target-badge">連結業務：義消裝備管理 及 義消出勤費申請</span>
+            </div>
+        </div>
+        <p style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
+            📌 <strong>情境說明</strong>：義消同仁出勤協勤救災前之個人防護裝備（PPE）配發管理，以及出勤後之出勤費申報作業：
+            <br>• <strong>裝備配發</strong>：本年度採購案針對尚未配發之火搶義消全面配發，預計 11 月完成驗收後發放。
+            <br>• <strong>津貼申報</strong>：出勤紀錄由救災派遣系統匯出簽核，並檢附印領清冊辦理核發。
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    equip_task = all_tasks_dict.get("本年度義消消防衣帽鞋採購與火搶義消配發")
+    if equip_task:
+        render_task_card(equip_task)
+    allowance_task = all_tasks_dict.get("義消出勤費申請作業")
+    if allowance_task:
+        render_task_card(allowance_task)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # 情境 4: 義消辦理團結活動
+    st.markdown("""
+    <div class="guide-card">
+        <div class="guide-card-header">
+            <span class="guide-icon">🤝</span>
+            <div>
+                <span class="guide-title">4. 義消辦理團結活動</span>
+                <span class="guide-target-badge">連結業務：義消申請補縣府及各鄉鎮公所補捐助案件</span>
+            </div>
+        </div>
+        <p style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
+            📌 <strong>情境說明</strong>：各義消分隊規劃辦理常年訓練研習、自強團結活動或器材購置時，向縣府及各鄉鎮公所申請補捐助款之作業指引：
+            <br>• <strong>線上系統</strong>：請至補捐助系統下載表單並線上登錄。
+            <br>• <strong>申請範例（顏色區別）</strong>：申請範例會隨時間及相關規定更新，<span style="color:#dc2626;font-weight:700;">更新部分會以顏色做清楚區別</span>，請務必參照最新版本填報！
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    grant_task = all_tasks_dict.get("義消申請補縣府及各鄉鎮公所補捐助案件")
+    if grant_task:
+        render_task_card(grant_task)
 
 
 # === 2. 義消業務 Tab ===
@@ -613,7 +729,7 @@ if st.session_state["is_admin"]:
                 with col_a:
                     new_category = st.selectbox("業務分類 *", db.CATEGORIES)
                 with col_b:
-                    new_subcategory = st.text_input("子項目 (例：專長資料庫、保險互助、補捐助管理)")
+                    new_subcategory = st.text_input("子項目 (例：專長資料庫、保險互助、業務評核)")
                 with col_c:
                     new_owner = st.text_input("科內承辦人 (例：廖昱翔科員、林威宇小隊長、陳怡忻分隊長、尤仁宏秘書)")
 
@@ -724,7 +840,7 @@ if st.session_state["is_admin"]:
         # 子分頁 4: 資料庫重設
         with subtab4:
             st.markdown("#### 🔄 資料庫管理與重設")
-            st.warning("⚠️ 重設資料庫將會清除目前的手動修改，並重新匯入科內指定的 11 筆官方標準業務資料。")
+            st.warning("⚠️ 重設資料庫將會清除目前的手動修改，並重新匯入科內指定的 12 筆官方標準業務資料。")
             confirm_reseed = st.checkbox("我了解這會覆蓋目前的自訂資料並重設為官方清單資料")
             if st.button("🔄 重新初始化資料庫 (重設為科內官方業務清單)", disabled=not confirm_reseed, type="primary"):
                 db.init_db(force_reseed=True)
