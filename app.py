@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 app.py - 民力科業務知識動態看板
-Streamlit 主程式：專業義消承辦人情境導引、5大業務分類分頁、前台查閱、紅字異動醒目提示、Excel式在線編輯
+Streamlit 主程式：專業義消承辦人情境導引、5大業務分類分頁、我有話要說回饋專區、Excel式在線編輯
 """
 
 import streamlit as st
@@ -218,6 +218,26 @@ st.markdown("""
         font-size: 0.88rem;
         margin: 0.25rem 0.4rem 0.25rem 0;
     }
+
+    /* 回饋留言卡片 */
+    .feedback-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 1.2rem 1.4rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+    }
+    .feedback-reply-box {
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+        border-left: 5px solid #10b981;
+        padding: 0.8rem 1rem;
+        border-radius: 6px;
+        margin-top: 0.8rem;
+        color: #166534;
+        font-size: 0.92rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -227,7 +247,7 @@ st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between;">
         <div>
             <h1>🚒 民力科業務知識動態看板</h1>
-            <p>Civilian & Volunteer Force Division Management & Knowledge Portal | 專業義消承辦人導引 • 最新異動醒目提示 • 隨時雲端更新</p>
+            <p>Civilian & Volunteer Force Division Management & Knowledge Portal | 專業義消承辦人導引 • 最新異動醒目提示 • 我有話要說雙向回饋</p>
         </div>
         <div style="text-align: right; font-size: 0.85rem; opacity: 0.9;">
             📅 資料庫狀態：<strong>已連線</strong><br>
@@ -273,7 +293,7 @@ with st.sidebar:
             else:
                 st.error("❌ 密碼錯誤，請洽民力科系統管理員。")
     else:
-        st.success("🟢 已啟用維護權限（可即時編輯）")
+        st.success("🟢 已啟用維護權限（可即時編輯與回覆留言）")
         if st.button("🔒 鎖定 / 退出維護模式", use_container_width=True):
             st.session_state["is_admin"] = False
             st.info("已退出維護模式。")
@@ -328,17 +348,17 @@ with col_kpi2:
 
 with col_kpi3:
     st.markdown(f"""
-    <div class="metric-card metric-card-warning">
-        <div class="metric-title">💰 待核銷管制案件</div>
-        <div class="metric-value">{stats['pending_reimburse']} <span style="font-size:1rem;color:#64748b;">項</span></div>
+    <div class="metric-card metric-card-alert">
+        <div class="metric-title">⚠️ 最新異動宣導提醒</div>
+        <div class="metric-value" style="color:#dc2626;">{stats['highlight']} <span style="font-size:1rem;color:#dc2626;">則</span></div>
     </div>
     """, unsafe_allow_html=True)
 
 with col_kpi4:
     st.markdown(f"""
-    <div class="metric-card metric-card-alert">
-        <div class="metric-title">⚠️ 最新異動宣導提醒</div>
-        <div class="metric-value" style="color:#dc2626;">{stats['highlight']} <span style="font-size:1rem;color:#dc2626;">則</span></div>
+    <div class="metric-card metric-card-success">
+        <div class="metric-title">💬 我有話要說回饋數</div>
+        <div class="metric-value" style="color:#047857;">{stats['feedback_total']} <span style="font-size:1rem;color:#64748b;">則 ({stats['feedback_replied']}已覆)</span></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -427,14 +447,15 @@ def render_task_card(task):
             render_doc_links(task["doc_links"])
 
 
-# 頁面分頁設計：以「專業義消承辦人」為首要情境導引
+# 頁面分頁設計：專業義消承辦人 + 5大業務 + 我有話要說 + 後台維護
 tab_names = [
     "🎖️ 專業義消承辦人",
     "🚒 義消業務",
     "🎁 義消福利",
     "💰 補捐助業務",
     "🎯 訓練業務",
-    "🌟 其他推動業務"
+    "🌟 其他推動業務",
+    "💬 我有話要說"
 ]
 
 if st.session_state["is_admin"]:
@@ -454,7 +475,6 @@ with tabs[0]:
     </div>
     """, unsafe_allow_html=True)
 
-    # 取得關聯任務資料
     all_tasks_dict = {t["title"]: t for t in db.get_tasks_by_filter()}
 
     # 情境 1: 我的分隊義消是誰
@@ -671,14 +691,109 @@ with tabs[5]:
             render_task_card(t)
 
 
-# === 7. 科內維護模式 Tab (若已登入) ===
-if st.session_state["is_admin"]:
-    with tabs[6]:
-        st.markdown("### ⚙️ 科內承辦人線上快速維護介面")
-        st.info("💡 承辦人可直接在此處使用類似 Excel 的表格在線編輯，或透過表單新增/維護詳細 Markdown 作業流程。")
+# === 7. 我有話要說 Tab ===
+with tabs[6]:
+    st.markdown("""
+    <div style="background: linear-gradient(to right, #ecfdf5, #f0fdf4); border: 1px solid #a7f3d0; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.5rem;">
+        <h3 style="color: #065f46; margin-top: 0; margin-bottom: 0.4rem;">💬 我有話要說 — 義消承辦人與分隊同仁雙向回饋專區</h3>
+        <p style="color: #047857; font-size: 0.95rem; margin-bottom: 0;">
+            開放各大隊、中隊、分隊義消承辦人及全體同仁提出實務執行問題、法規諮詢、作業建議或系統回饋。民力科將定期彙整、專人查明並公開回覆！
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-        subtab1, subtab2, subtab3, subtab4 = st.tabs([
+    col_fb_form, col_fb_list = st.columns([4, 6])
+
+    # 左側：填寫反映表單
+    with col_fb_form:
+        st.markdown("#### ✍️ 我要提問 / 反映問題")
+        with st.form("add_feedback_form", clear_on_submit=True):
+            fb_unit = st.text_input("所屬單位 / 分隊 *", placeholder="例：海山分隊、慈福分隊、特搜分隊...")
+            fb_submitter = st.text_input("提報人姓名 / 職稱 (選填，可匿名)", placeholder="例：林分隊長、王小隊長、張隊員...")
+            fb_category = st.selectbox("反映業務類別 *", db.FEEDBACK_CATEGORIES)
+            fb_contact = st.text_input("聯絡電話 / 公務分機 / 信箱 (選填)", placeholder="方便科內承辦人與您直接聯繫說明")
+            fb_content = st.text_area("反映內容 / 問題說明 / 具體建議 *", placeholder="請詳細描述您的問題、遇到的困難或改進建議...", height=160)
+            
+            fb_submitted = st.form_submit_button("🚀 確認送出意見", type="primary", use_container_width=True)
+            if fb_submitted:
+                if not fb_unit.strip() or not fb_content.strip():
+                    st.error("請務必填寫「所屬單位/分隊」及「反映內容」！")
+                else:
+                    new_fb_id = db.add_feedback(fb_unit, fb_submitter, fb_category, fb_content, fb_contact)
+                    st.success(f"🎉 成功送出！留言編號 #{new_fb_id}，民力科承辦人員將盡速為您處理查覆。")
+                    st.rerun()
+
+    # 右側：問題與民力科回覆列表
+    with col_fb_list:
+        st.markdown("#### 📢 同仁意見與民力科官方回覆看板")
+        
+        col_f1, col_f2 = st.columns([1, 1])
+        with col_f1:
+            fb_filter_cat = st.selectbox("依類別篩選", ["全部類別"] + db.FEEDBACK_CATEGORIES, key="fb_cat_filter")
+        with col_f2:
+            fb_filter_status = st.selectbox("依處理狀態", ["全部狀態"] + db.FEEDBACK_STATUSES, key="fb_status_filter")
+
+        feedbacks = db.get_all_feedbacks(category_filter=fb_filter_cat, status_filter=fb_filter_status)
+        st.caption(f"共計 **{len(feedbacks)}** 則回饋紀錄：")
+
+        if not feedbacks:
+            st.info("目前無符合條件的回饋紀錄。")
+        else:
+            status_style_map = {
+                "待處理": ("#fef3c7", "#b45309", "🟡 待處理"),
+                "處理中": ("#dbeafe", "#1d4ed8", "🔵 處理中"),
+                "已回覆": ("#dcfce7", "#15803d", "🟢 已回覆"),
+                "列入參考": ("#f1f5f9", "#475569", "⚪ 列入參考")
+            }
+
+            for fb in feedbacks:
+                bg_c, text_c, status_txt = status_style_map.get(fb["status"], ("#f1f5f9", "#475569", fb["status"]))
+                
+                st.markdown(f"""
+                <div class="feedback-card">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                        <div>
+                            <span style="background:#ede9fe; color:#5b21b6; font-weight:700; padding:2px 8px; border-radius:4px; font-size:0.8rem;">{fb['category']}</span>
+                            <strong style="margin-left:0.5rem; font-size:1rem; color:#1e293b;">🏢 {fb['unit_name']}</strong>
+                            <span style="color:#64748b; font-size:0.85rem; margin-left:0.4rem;">({fb['submitter'] or '熱心同仁'})</span>
+                        </div>
+                        <div>
+                            <span style="background:{bg_c}; color:{text_c}; padding:2px 8px; border-radius:9999px; font-size:0.78rem; font-weight:700;">{status_txt}</span>
+                        </div>
+                    </div>
+                    <div style="font-size:0.95rem; color:#334155; line-height:1.5; margin-bottom:0.4rem;">
+                        💬 <strong>反映內容</strong>：{fb['content']}
+                    </div>
+                    <div style="font-size:0.8rem; color:#94a3b8; text-align:right;">
+                        🕒 提報時間：{fb['created_at']}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                if fb["admin_reply"] and fb["admin_reply"].strip():
+                    st.markdown(f"""
+                    <div class="feedback-reply-box" style="margin-top:-0.6rem; margin-bottom:1.2rem;">
+                        <strong>📢 民力科回覆 ({fb['replied_at'] or ''})：</strong><br>
+                        {fb['admin_reply']}
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown("""
+                    <div style="font-size:0.85rem; color:#94a3b8; margin-top:-0.4rem; margin-bottom:1.2rem; padding-left:0.5rem;">
+                        ⏳ <em>民力科正查明處理中，請稍候回覆...</em>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+
+# === 8. 科內維護模式 Tab (若已登入) ===
+if st.session_state["is_admin"]:
+    with tabs[7]:
+        st.markdown("### ⚙️ 科內承辦人線上快速維護介面")
+        st.info("💡 承辦人可直接在此處使用類似 Excel 的表格在線編輯、新增業務，或回覆「我有話要說」同仁留言。")
+
+        subtab1, subtab2, subtab3, subtab4, subtab5 = st.tabs([
             "📋 Excel 式線上即時編輯",
+            "💬 我有話要說 - 線上回覆管理",
             "➕ 新增業務項目",
             "✏️ 單筆詳細維護 / 刪除",
             "🔄 資料庫管理與重設"
@@ -691,7 +806,6 @@ if st.session_state["is_admin"]:
             
             df_current = db.get_all_tasks_df()
             
-            # 設定欄位設定
             column_config = {
                 "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
                 "category": st.column_config.SelectboxColumn("業務分類", options=db.CATEGORIES, required=True, width="medium"),
@@ -721,8 +835,52 @@ if st.session_state["is_admin"]:
                     st.success(f"✅ 成功儲存！已同步更新 {updated_cnt} 筆變更資料至 SQLite 資料庫。")
                     st.rerun()
 
-        # 子分頁 2: 新增業務項目
+        # 子分頁 2: 回覆我有話要說留言
         with subtab2:
+            st.markdown("#### 💬 我有話要說 — 同仁留言官方回覆與狀態更新")
+            all_fbs = db.get_all_feedbacks()
+            if not all_fbs:
+                st.info("目前無任何同仁回饋留言。")
+            else:
+                fb_options = {f"ID #{fb['id']} - [{fb['category']}] {fb['unit_name']} ({fb['submitter']}) - {fb['status']}": fb['id'] for fb in all_fbs}
+                sel_fb_label = st.selectbox("請選擇要回覆或處理的留言", list(fb_options.keys()))
+                sel_fb_id = fb_options[sel_fb_label]
+                cur_fb = next(f for f in all_fbs if f["id"] == sel_fb_id)
+
+                st.markdown(f"""
+                <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:1rem; margin-bottom:1rem;">
+                    <strong>提報單位</strong>：{cur_fb['unit_name']} ({cur_fb['submitter']})<br>
+                    <strong>業務類別</strong>：{cur_fb['category']}<br>
+                    <strong>聯絡方式</strong>：{cur_fb['contact_info'] or '無'}<br>
+                    <strong>反映時間</strong>：{cur_fb['created_at']}<br>
+                    <div style="margin-top:0.5rem; color:#1e293b;">
+                        <strong>💬 反映內容</strong>：{cur_fb['content']}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                with st.form("reply_fb_form"):
+                    reply_status = st.selectbox("處理狀態", db.FEEDBACK_STATUSES, index=db.FEEDBACK_STATUSES.index(cur_fb["status"]) if cur_fb["status"] in db.FEEDBACKSTATUSES else 0)
+                    reply_content = st.text_area("民力科官方回覆內容 (將公開於看板供同仁查閱)", value=cur_fb["admin_reply"] or "", height=150)
+                    
+                    col_rep1, col_rep2 = st.columns([4, 6])
+                    with col_rep1:
+                        rep_btn = st.form_submit_button("📢 發布 / 更新官方回覆", type="primary", use_container_width=True)
+
+                    if rep_btn:
+                        db.reply_feedback(sel_fb_id, reply_status, reply_content)
+                        st.success(f"✅ 已成功更新留言 ID #{sel_fb_id} 的回覆與狀態！")
+                        st.rerun()
+
+                with st.expander("🗑️ 刪除此筆回饋紀錄"):
+                    del_chk = st.checkbox(f"我確認要刪除留言 ID #{sel_fb_id}", key=f"del_fb_{sel_fb_id}")
+                    if st.button("❌ 確認刪除留言", disabled=not del_chk):
+                        db.delete_feedback(sel_fb_id)
+                        st.warning(f"已刪除留言 ID #{sel_fb_id}！")
+                        st.rerun()
+
+        # 子分頁 3: 新增業務項目
+        with subtab3:
             st.markdown("#### ➕ 新增業務項目表單")
             with st.form("add_task_form", clear_on_submit=True):
                 col_a, col_b, col_c = st.columns([2, 2, 2])
@@ -775,8 +933,8 @@ if st.session_state["is_admin"]:
                         st.success(f"🎉 成功新增業務項目！編號：ID #{new_id}【{new_title}】")
                         st.rerun()
 
-        # 子分頁 3: 單筆詳細編輯與刪除
-        with subtab3:
+        # 子分頁 4: 單筆詳細編輯與刪除
+        with subtab4:
             st.markdown("#### ✏️ 單筆業務詳細編輯與刪除")
             df_edit = db.get_all_tasks_df()
             if df_edit.empty:
@@ -786,7 +944,6 @@ if st.session_state["is_admin"]:
                 selected_label = st.selectbox("請選擇要編輯的業務項目", list(task_options.keys()))
                 selected_id = task_options[selected_label]
                 
-                # 撈取該筆資料
                 current_item = df_edit[df_edit["id"] == selected_id].iloc[0]
 
                 with st.form("edit_single_form"):
@@ -829,7 +986,6 @@ if st.session_state["is_admin"]:
                         st.success(f"✅ 已更新 ID #{selected_id}【{edit_title}】！")
                         st.rerun()
 
-                # 獨立刪除按鈕區
                 with st.expander("🗑️ 危險區域：刪除此業務項目"):
                     confirm_del = st.checkbox(f"我確認要永久刪除 ID #{selected_id}【{current_item['title']}】", key=f"del_chk_{selected_id}")
                     if st.button("❌ 確認永久刪除", type="secondary", disabled=not confirm_del):
@@ -837,10 +993,10 @@ if st.session_state["is_admin"]:
                         st.warning(f"已刪除 ID #{selected_id}！")
                         st.rerun()
 
-        # 子分頁 4: 資料庫重設
-        with subtab4:
+        # 子分頁 5: 資料庫重設
+        with subtab5:
             st.markdown("#### 🔄 資料庫管理與重設")
-            st.warning("⚠️ 重設資料庫將會清除目前的手動修改，並重新匯入科內指定的 12 筆官方標準業務資料。")
+            st.warning("⚠️ 重設資料庫將會清除目前的手動修改，並重新匯入科內指定的 12 筆官方標準業務資料與範例留言。")
             confirm_reseed = st.checkbox("我了解這會覆蓋目前的自訂資料並重設為官方清單資料")
             if st.button("🔄 重新初始化資料庫 (重設為科內官方業務清單)", disabled=not confirm_reseed, type="primary"):
                 db.init_db(force_reseed=True)

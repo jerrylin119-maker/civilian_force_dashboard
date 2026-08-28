@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 database.py - 民力科業務知識動態看板 資料庫模組
-SQLite 資料庫操作、資料表建立與民力科官方實際業務清單初始化
+SQLite 資料庫操作：業務清單 (TaskDatabase) 與 我有話要說回饋留言板 (FeedbackDatabase)
 """
 
 import sqlite3
@@ -15,7 +15,10 @@ DB_PATH = os.path.join(DB_DIR, "minli_tasks.db")
 CATEGORIES = ["義消業務", "義消福利", "補捐助業務", "訓練業務", "其他推動業務"]
 STATUSES = ["常態辦理", "規劃中", "執行中", "待核銷", "已結案"]
 
-# 精確符合科內同仁實際分工與業務項目 (包含新增 115年義消評核)
+FEEDBACK_CATEGORIES = ["義消業務", "義消福利", "補捐助案件", "訓練業務", "系統建議", "其他問題"]
+FEEDBACK_STATUSES = ["待處理", "處理中", "已回覆", "列入參考"]
+
+# 精確符合科內同仁實際分工與業務項目 (包含 115年義消評核)
 SAMPLE_DATA = [
     # ==================== 1. 義消業務 ====================
     # 承辦人: 廖昱翔科員、林威宇小隊長
@@ -206,6 +209,43 @@ SAMPLE_DATA = [
     }
 ]
 
+# 「我有話要說」範例留言初始資料
+SAMPLE_FEEDBACKS = [
+    {
+        "unit_name": "海山分隊",
+        "submitter": "蕭義消隊員",
+        "category": "義消福利",
+        "content": "請問 116 年預計推動的義消健康檢查專案，是否有規定入隊年資或年齡限制？名額如何分配給各分隊？",
+        "contact_info": "公務分機 2119",
+        "status": "已回覆",
+        "admin_reply": "蕭同仁您好！116 年度健檢專案預計每年提供 300 位名額，規劃優先針對 40 歲以上且出勤率達標之現役義消同仁辦理，詳細名額分配與各特約醫療院所清冊預計於年底前函頒各大隊週知。",
+        "created_at": "2026-08-28 09:30:00",
+        "replied_at": "2026-08-28 11:00:00"
+    },
+    {
+        "unit_name": "慈福分隊",
+        "submitter": "分隊義消承辦人",
+        "category": "補捐助案件",
+        "content": "分隊向公所申請辦理常年研習活動補助款，發票黏存單如檢附電子發票證明聯，是否必須請店家登載機關統編？",
+        "contact_info": "公務信箱 minli_cifu@ntpc.gov.tw",
+        "status": "已回覆",
+        "admin_reply": "承辦人您好！電子發票證明聯請務必請店家登載機關統一編號，若為熱感應紙建議影印一份併同正本黏存，以防字跡褪色影響審計核銷。",
+        "created_at": "2026-08-28 10:15:00",
+        "replied_at": "2026-08-28 13:20:00"
+    },
+    {
+        "unit_name": "新莊義消分隊",
+        "submitter": "林分隊長",
+        "category": "義消業務",
+        "content": "本年度火搶義消消防衣帽鞋配發進度，各分隊預計何時可以送交身材尺寸與型號對照清單？",
+        "contact_info": "0912-345-678",
+        "status": "處理中",
+        "admin_reply": "林分隊長您好！廠商已備料並排定於 11 月辦理驗收，各分隊身材尺寸清冊已請各大隊彙整中，預計本月中旬由科內統一對焦名冊。",
+        "created_at": "2026-08-28 14:00:00",
+        "replied_at": "2026-08-28 14:45:00"
+    }
+]
+
 
 def get_db_connection():
     """取得 SQLite 資料庫連線"""
@@ -219,6 +259,7 @@ def init_db(force_reseed=False):
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    # 1. 業務主表 TaskDatabase
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS TaskDatabase (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -233,16 +274,32 @@ def init_db(force_reseed=False):
             last_updated TEXT NOT NULL
         )
     """)
+
+    # 2. 我有話要說留言板 FeedbackDatabase
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS FeedbackDatabase (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            unit_name TEXT NOT NULL,
+            submitter TEXT,
+            category TEXT NOT NULL,
+            content TEXT NOT NULL,
+            contact_info TEXT,
+            status TEXT NOT NULL DEFAULT '待處理',
+            admin_reply TEXT,
+            created_at TEXT NOT NULL,
+            replied_at TEXT
+        )
+    """)
     conn.commit()
 
     if force_reseed:
         cursor.execute("DELETE FROM TaskDatabase")
+        cursor.execute("DELETE FROM FeedbackDatabase")
         conn.commit()
 
+    # 檢查 TaskDatabase 是否有資料
     cursor.execute("SELECT COUNT(*) FROM TaskDatabase")
-    count = cursor.fetchone()[0]
-
-    if count == 0:
+    if cursor.fetchone()[0] == 0:
         for item in SAMPLE_DATA:
             cursor.execute("""
                 INSERT INTO TaskDatabase (
@@ -259,6 +316,28 @@ def init_db(force_reseed=False):
                 item["content_detail"],
                 item["doc_links"],
                 item["last_updated"]
+            ))
+        conn.commit()
+
+    # 檢查 FeedbackDatabase 是否有資料
+    cursor.execute("SELECT COUNT(*) FROM FeedbackDatabase")
+    if cursor.fetchone()[0] == 0:
+        for fb in SAMPLE_FEEDBACKS:
+            cursor.execute("""
+                INSERT INTO FeedbackDatabase (
+                    unit_name, submitter, category, content, contact_info,
+                    status, admin_reply, created_at, replied_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                fb["unit_name"],
+                fb["submitter"],
+                fb["category"],
+                fb["content"],
+                fb["contact_info"],
+                fb["status"],
+                fb["admin_reply"],
+                fb["created_at"],
+                fb["replied_at"]
             ))
         conn.commit()
 
@@ -462,10 +541,100 @@ def get_summary_stats():
     cursor.execute("SELECT COUNT(*) FROM TaskDatabase WHERE update_highlight IS NOT NULL AND TRIM(update_highlight) != ''")
     highlight_count = cursor.fetchone()[0]
     
+    # 留言統計
+    cursor.execute("SELECT COUNT(*) FROM FeedbackDatabase")
+    feedback_total = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM FeedbackDatabase WHERE status = '已回覆'")
+    feedback_replied = cursor.fetchone()[0]
+
     conn.close()
     return {
         "total": total_count,
         "in_progress": in_progress_count,
         "pending_reimburse": pending_reimburse_count,
-        "highlight": highlight_count
+        "highlight": highlight_count,
+        "feedback_total": feedback_total,
+        "feedback_replied": feedback_replied
     }
+
+
+# ==================== 我有話要說 (Feedback) CRUD 操作 ====================
+
+def get_all_feedbacks(category_filter=None, status_filter=None):
+    """取得所有同仁回饋留言"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = "SELECT * FROM FeedbackDatabase WHERE 1=1"
+    params = []
+
+    if category_filter and category_filter != "全部類別":
+        query += " AND category = ?"
+        params.append(category_filter)
+
+    if status_filter and status_filter != "全部狀態":
+        query += " AND status = ?"
+        params.append(status_filter)
+
+    query += " ORDER BY id DESC"
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def add_feedback(unit_name, submitter, category, content, contact_info):
+    """新增一筆同仁回饋留言"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute("""
+        INSERT INTO FeedbackDatabase (
+            unit_name, submitter, category, content, contact_info,
+            status, admin_reply, created_at, replied_at
+        ) VALUES (?, ?, ?, ?, ?, '待處理', '', ?, NULL)
+    """, (
+        unit_name.strip(),
+        submitter.strip() if submitter else "熱心同仁",
+        category,
+        content.strip(),
+        contact_info.strip() if contact_info else "",
+        now_str
+    ))
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return new_id
+
+
+def reply_feedback(feedback_id, status, admin_reply):
+    """科內管理員回覆或更新回饋狀態"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute("""
+        UPDATE FeedbackDatabase SET
+            status = ?,
+            admin_reply = ?,
+            replied_at = ?
+        WHERE id = ?
+    """, (status, admin_reply.strip(), now_str, feedback_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_feedback(feedback_id):
+    """刪除指定回饋留言"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM FeedbackDatabase WHERE id = ?", (feedback_id,))
+    conn.commit()
+    conn.close()
