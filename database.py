@@ -850,3 +850,33 @@ def import_tasks_from_df(df: pd.DataFrame, replace_all=True):
     conn.commit()
     conn.close()
     return count
+
+def get_tasks_for_officer(officer_name):
+    """取得指定承辦人負責的所有業務項目"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if not officer_name or officer_name == "全部承辦人":
+        cursor.execute("SELECT id, category, subcategory, title, owner, status FROM TaskDatabase ORDER BY category, id")
+    else:
+        cursor.execute("SELECT id, category, subcategory, title, owner, status FROM TaskDatabase WHERE owner LIKE ? ORDER BY category, id", (f"%{officer_name}%",))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def search_tasks_for_jump(query_str):
+    """依關鍵字全文檢索業務項目清單供點擊跳轉"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    q = f"%{query_str.strip()}%"
+    cursor.execute("""
+        SELECT id, category, subcategory, title, owner, status 
+        FROM TaskDatabase 
+        WHERE title LIKE ? OR subcategory LIKE ? OR owner LIKE ? OR content_detail LIKE ? OR update_highlight LIKE ?
+        ORDER BY category, id
+    """, (q, q, q, q, q))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
