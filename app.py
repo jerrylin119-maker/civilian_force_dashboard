@@ -983,58 +983,99 @@ if st.session_state["is_admin"]:
         # 子分頁 5: 單筆詳細編輯與刪除
         with subtab5:
             st.markdown("#### ✏️ 單筆業務詳細編輯與刪除")
+            st.caption("您可以先透過「業務分類篩選」快速縮小清單範圍，再選取特定項目進行詳細內容或 SOP 修改。切換項目時下方欄位將即時自動同步載入最新內容！")
+            
             df_edit = db.get_all_tasks_df()
             if df_edit.empty:
                 st.info("目前資料庫中無任何資料。")
             else:
-                task_options = {f"ID #{row['id']} - [{row['category']}] {row['title']} ({row['owner']})": row['id'] for _, row in df_edit.iterrows()}
-                selected_label = st.selectbox("請選擇要編輯的業務項目", list(task_options.keys()))
-                selected_id = task_options[selected_label]
+                col_sel_cat, col_sel_item = st.columns([3, 7])
+                with col_sel_cat:
+                    filter_cat = st.selectbox(
+                        "1. 先選業務分類篩選",
+                        ["全部分類"] + db.CATEGORIES,
+                        key="subtab5_cat_filter"
+                    )
                 
-                current_item = df_edit[df_edit["id"] == selected_id].iloc[0]
+                df_filtered_edit = df_edit if filter_cat == "全部分類" else df_edit[df_edit["category"] == filter_cat]
+                
+                if df_filtered_edit.empty:
+                    st.warning(f"目前分類「{filter_cat}」無任何業務項目。")
+                else:
+                    with col_sel_item:
+                        task_options = {f"ID #{row['id']} - [{row['category']}] {row['title']} ({row['owner'] or '未指派'})": row['id'] for _, row in df_filtered_edit.iterrows()}
+                        selected_label = st.selectbox("2. 選擇要編輯的具體業務項目 *", list(task_options.keys()), key=f"subtab5_task_picker_{filter_cat}")
+                        selected_id = task_options[selected_label]
+                    
+                    current_item = df_edit[df_edit["id"] == selected_id].iloc[0]
 
-                with st.form(f"edit_single_form_{selected_id}"):
-                    col_e1, col_e2, col_e3 = st.columns([2, 2, 2])
-                    with col_e1:
-                        edit_category = st.selectbox("業務分類", db.CATEGORIES, index=db.CATEGORIES.index(current_item["category"]) if current_item["category"] in db.CATEGORIES else 0)
-                    with col_e2:
-                        edit_subcategory = st.text_input("子項目", value=current_item["subcategory"] or "")
-                    with col_e3:
-                        edit_owner = st.text_input("承辦人", value=current_item["owner"] or "")
+                    st.markdown(f'''
+                    <div style="background:#eff6ff; border:1px solid #bfdbfe; border-left:4px solid #2563eb; border-radius:6px; padding:0.6rem 1rem; margin:0.8rem 0 1rem 0; font-size:0.92rem; color:#1e40af;">
+                        📝 正在編輯：<strong>ID #{selected_id}【{current_item['title']}】</strong> &nbsp;|&nbsp; 
+                        分類：<strong>{current_item['category']}</strong> &nbsp;|&nbsp; 
+                        承辦人：<strong>{current_item['owner'] or '未指派'}</strong>
+                    </div>
+                    ''', unsafe_allow_html=True)
 
-                    col_e4, col_e5 = st.columns([4, 2])
-                    with col_e4:
-                        edit_title = st.text_input("業務項目名稱", value=current_item["title"] or "")
-                    with col_e5:
-                        edit_status = st.selectbox("執行狀態", db.STATUSES, index=db.STATUSES.index(current_item["status"]) if current_item["status"] in db.STATUSES else 0)
+                    with st.form(f"edit_single_form_{selected_id}"):
+                        col_e1, col_e2, col_e3 = st.columns([2, 2, 2])
+                        with col_e1:
+                            cat_idx = db.CATEGORIES.index(current_item["category"]) if current_item["category"] in db.CATEGORIES else 0
+                            edit_category = st.selectbox("業務分類 *", db.CATEGORIES, index=cat_idx, key=f"edit_cat_{selected_id}")
+                        with col_e2:
+                            edit_subcategory = st.text_input("子項目", value=current_item["subcategory"] or "", key=f"edit_subcat_{selected_id}")
+                        with col_e3:
+                            edit_owner = st.text_input("承辦人", value=current_item["owner"] or "", key=f"edit_owner_{selected_id}")
 
-                    edit_highlight = st.text_area("★ 最新異動 / 宣導重點 (紅字醒目提示)", value=current_item["update_highlight"] or "", height=80)
-                    edit_content = st.text_area("詳細工作內容 / SOP (Markdown)", value=current_item["content_detail"] or "", height=250)
-                    edit_doc_links = st.text_area("相關表單與雲端連結 (每行一筆)", value=current_item["doc_links"] or "", height=100)
+                        col_e4, col_e5 = st.columns([4, 2])
+                        with col_e4:
+                            edit_title = st.text_input("業務項目名稱 *", value=current_item["title"] or "", key=f"edit_title_{selected_id}")
+                        with col_e5:
+                            status_idx = db.STATUSES.index(current_item["status"]) if current_item["status"] in db.STATUSES else 0
+                            edit_status = st.selectbox("執行狀態 *", db.STATUSES, index=status_idx, key=f"edit_status_{selected_id}")
 
-                    save_btn = st.form_submit_button("💾 儲存此項目更新", type="primary", use_container_width=True)
-
-                    if save_btn:
-                        db.update_single_task(
-                            selected_id,
-                            edit_category,
-                            edit_subcategory.strip(),
-                            edit_title.strip(),
-                            edit_owner.strip(),
-                            edit_status,
-                            edit_highlight.strip(),
-                            edit_content.strip(),
-                            edit_doc_links.strip()
+                        edit_highlight = st.text_area(
+                            "★ 最新異動 / 宣導重點 (紅字醒目提示，若無可留空)",
+                            value=current_item["update_highlight"] or "",
+                            height=80,
+                            key=f"edit_high_{selected_id}"
                         )
-                        set_flash_message(f"🎉 成功儲存！已更新 ID #{selected_id}【{edit_title}】最新內容，各分頁與首頁導航已即時同步更新。", icon="💾")
-                        st.rerun()
+                        edit_content = st.text_area(
+                            "詳細工作內容 / SOP 作業指引 (支援 Markdown 排版)",
+                            value=current_item["content_detail"] or "",
+                            height=250,
+                            key=f"edit_content_{selected_id}"
+                        )
+                        edit_doc_links = st.text_area(
+                            "相關表單與雲端連結 (每行一筆)",
+                            value=current_item["doc_links"] or "",
+                            height=100,
+                            key=f"edit_links_{selected_id}"
+                        )
 
-                with st.expander("🗑️ 危險區域：刪除此業務項目"):
-                    confirm_del = st.checkbox(f"我確認要永久刪除 ID #{selected_id}【{current_item['title']}】", key=f"del_chk_{selected_id}")
-                    if st.button("❌ 確認永久刪除", type="secondary", disabled=not confirm_del):
-                        db.delete_task(selected_id)
-                        set_flash_message(f"✅ 已永久刪除 ID #{selected_id}【{current_item['title']}】！", msg_type="warning", icon="🗑️")
-                        st.rerun()
+                        save_btn = st.form_submit_button("💾 儲存此項目更新", type="primary", use_container_width=True)
+
+                        if save_btn:
+                            db.update_single_task(
+                                selected_id,
+                                edit_category,
+                                edit_subcategory.strip(),
+                                edit_title.strip(),
+                                edit_owner.strip(),
+                                edit_status,
+                                edit_highlight.strip(),
+                                edit_content.strip(),
+                                edit_doc_links.strip()
+                            )
+                            set_flash_message(f"🎉 成功儲存！已更新 ID #{selected_id}【{edit_title}】最新內容，各分頁與首頁導航已即時同步更新。", icon="💾")
+                            st.rerun()
+
+                    with st.expander(f"🗑️ 危險區域：刪除此業務項目 (ID #{selected_id})"):
+                        confirm_del = st.checkbox(f"我確認要永久刪除 ID #{selected_id}【{current_item['title']}】", key=f"del_chk_{selected_id}")
+                        if st.button("❌ 確認永久刪除", type="secondary", disabled=not confirm_del, key=f"del_btn_{selected_id}"):
+                            db.delete_task(selected_id)
+                            set_flash_message(f"✅ 已永久刪除 ID #{selected_id}【{current_item['title']}】！", msg_type="warning", icon="🗑️")
+                            st.rerun()
 
         # 子分頁 6: 資料庫重設
         with subtab6:
