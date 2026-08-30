@@ -302,31 +302,56 @@ with st.sidebar:
     st.caption("🏢 臺東縣消防局 民力訓練科")
     st.markdown("---")
 
-    # 1. 全域搜尋與多維動態篩選
-    st.subheader("🔍 業務檢索與分項篩選")
-    search_query = st.text_input("關鍵字全域搜尋", placeholder="搜尋業務名稱、SOP、子項目...", help="支援搜尋業務標題、子項目、承辦人、SOP 詳細內容與異動宣導重點")
+    # 1. 業務檢索與篩選 (極簡化：業務內容關鍵字 + 承辦人 + 實體搜尋按鈕)
+    st.subheader("🔍 業務快速檢索")
     
-    # 業務大項篩選
-    all_categories_opt = ["全部業務"] + db.CATEGORIES
-    selected_category = st.selectbox("依業務大項篩選", all_categories_opt)
+    if "search_query" not in st.session_state:
+        st.session_state["search_query"] = ""
+    if "selected_owner" not in st.session_state:
+        st.session_state["selected_owner"] = "全部承辦人"
+        
+    with st.form("search_filter_form"):
+        input_query = st.text_input(
+            "業務內容 / 關鍵字搜尋",
+            value=st.session_state["search_query"],
+            placeholder="輸入業務名稱、SOP內容、法規...",
+            help="支援全文檢索業務項目、SOP 詳細步驟與相關連結"
+        )
+        
+        owners = ["全部承辦人"] + db.get_owners_list()
+        owner_idx = owners.index(st.session_state["selected_owner"]) if st.session_state["selected_owner"] in owners else 0
+        input_owner = st.selectbox("依承辦人篩選", owners, index=owner_idx)
+        
+        col_s1, col_s2 = st.columns([1, 1])
+        with col_s1:
+            btn_search = st.form_submit_button("🔍 開始搜尋", type="primary", use_container_width=True)
+        with col_s2:
+            btn_reset = st.form_submit_button("🔄 清除重設", use_container_width=True)
 
-    # 業務子項目/分項篩選 (自動依大項連動並自動產生分項清單！)
-    available_subcats = db.get_subcategories_list(selected_category)
-    subcat_options = ["全部分項"] + available_subcats
-    selected_subcategory = st.selectbox("依分項 / 子項目篩選", subcat_options, help="系統自動依資料庫內之業務分項動態產出")
+        if btn_search:
+            st.session_state["search_query"] = input_query.strip()
+            st.session_state["selected_owner"] = input_owner
+            set_flash_message(f"🔍 搜尋完成！已為您篩選相關業務項目。", icon="🔍")
+            st.rerun()
 
-    # 依承辦人篩選 (自動拆分單一承辦人姓名)
-    owners = ["全部承辦人"] + db.get_owners_list()
-    selected_owner = st.selectbox("依承辦人篩選", owners, help="自動拆分各承辦人姓名，支援精準個別篩選")
-    
-    # 依執行狀態篩選
-    statuses = ["全部狀態"] + db.STATUSES
-    selected_status = st.selectbox("依執行狀態篩選", statuses)
-    
-    only_highlight = st.checkbox("⚠️ 僅顯示具【最新異動重點】項目", value=False)
+        if btn_reset:
+            st.session_state["search_query"] = ""
+            st.session_state["selected_owner"] = "全部承辦人"
+            set_flash_message("🔄 已清除所有搜尋條件，呈現全部業務清單。", msg_type="info", icon="🔄")
+            st.rerun()
+
+    search_query = st.session_state["search_query"]
+    selected_owner = st.session_state["selected_owner"]
+
+    if search_query or selected_owner != "全部承辦人":
+        conditions = []
+        if search_query:
+            conditions.append(f"關鍵字「{search_query}」")
+        if selected_owner != "全部承辦人":
+            conditions.append(f"承辦人「{selected_owner}」")
+        st.info(f"🔎 目前篩選：{' + '.join(conditions)}")
 
     st.markdown("---")
-
     # 2. 科內維護模式（管理員登入）
     st.subheader("🔐 科內維護模式")
     if not st.session_state["is_admin"]:
@@ -578,11 +603,8 @@ with tabs[1]:
     
     tasks_cat = db.get_tasks_by_filter(
         category="義消業務",
-        subcategory=selected_subcategory,
         owner=selected_owner,
-        status=selected_status,
-        search_query=search_query,
-        only_highlight=only_highlight
+        search_query=search_query
     )
     st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
     if not tasks_cat:
@@ -599,11 +621,8 @@ with tabs[2]:
     
     tasks_cat = db.get_tasks_by_filter(
         category="義消福利",
-        subcategory=selected_subcategory,
         owner=selected_owner,
-        status=selected_status,
-        search_query=search_query,
-        only_highlight=only_highlight
+        search_query=search_query
     )
     st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
     if not tasks_cat:
@@ -636,11 +655,8 @@ with tabs[3]:
 
     tasks_cat = db.get_tasks_by_filter(
         category="補捐助業務",
-        subcategory=selected_subcategory,
         owner=selected_owner,
-        status=selected_status,
-        search_query=search_query,
-        only_highlight=only_highlight
+        search_query=search_query
     )
     st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
     if not tasks_cat:
@@ -657,11 +673,8 @@ with tabs[4]:
     
     tasks_cat = db.get_tasks_by_filter(
         category="訓練業務",
-        subcategory=selected_subcategory,
         owner=selected_owner,
-        status=selected_status,
-        search_query=search_query,
-        only_highlight=only_highlight
+        search_query=search_query
     )
     st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
     if not tasks_cat:
@@ -678,11 +691,8 @@ with tabs[5]:
     
     tasks_cat = db.get_tasks_by_filter(
         category="其他推動業務",
-        subcategory=selected_subcategory,
         owner=selected_owner,
-        status=selected_status,
-        search_query=search_query,
-        only_highlight=only_highlight
+        search_query=search_query
     )
     if not tasks_cat:
         st.info("ℹ️ 目前「其他推動業務」尚無列管項目。承辦人可開啟「科內維護模式」隨時新增其他專案與業務。")
