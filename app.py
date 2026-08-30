@@ -2,7 +2,7 @@
 """
 app.py - 民力科業務知識動態看板
 Streamlit 主程式：
-1. 專業義消承辦人情境導引 (支援線上動態修改)
+1. 專業義消承辦人情境導引 (僅精純呈現情境說明與SOP/系統連結，不顯示多餘卡片標籤)
 2. 5大業務分類分頁與全域搜尋
 3. 最新異動紅字醒目提示
 4. 我有話要說雙向回饋與回覆看板 (支援單筆刪除、一鍵清空)
@@ -50,44 +50,56 @@ st.markdown("""
         margin-bottom: 0;
     }
 
-    /* 專業義消承辦人情境引導卡片 */
-    .guide-card {
+    /* 專業義消承辦人專屬精簡情境卡片 */
+    .guide-clean-container {
         background: #ffffff;
-        border: 1px solid #e0e7ff;
+        border: 1px solid #e2e8f0;
         border-radius: 12px;
-        padding: 1.4rem 1.6rem;
-        margin-bottom: 1.2rem;
-        box-shadow: 0 4px 12px rgba(30, 58, 138, 0.06);
+        padding: 1.5rem 1.8rem;
+        margin-bottom: 1.8rem;
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.04);
         border-left: 6px solid #2563eb;
-        transition: transform 0.15s ease, box-shadow 0.15s ease;
     }
-    .guide-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 20px rgba(30, 58, 138, 0.12);
-    }
-    .guide-card-header {
+    .guide-clean-header {
         display: flex;
         align-items: center;
         margin-bottom: 0.8rem;
     }
-    .guide-icon {
-        font-size: 1.6rem;
-        margin-right: 0.75rem;
-    }
-    .guide-title {
-        font-size: 1.25rem;
+    .guide-clean-title {
+        font-size: 1.3rem;
         font-weight: 700;
         color: #1e3a8a;
     }
-    .guide-target-badge {
+    .guide-clean-badge {
         background: #eff6ff;
         border: 1px solid #bfdbfe;
         color: #1d4ed8;
-        padding: 0.2rem 0.6rem;
+        padding: 0.2rem 0.65rem;
         border-radius: 9999px;
-        font-size: 0.8rem;
+        font-size: 0.82rem;
         font-weight: 600;
-        margin-left: 0.6rem;
+        margin-left: 0.8rem;
+    }
+    .guide-desc-box {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-left: 4px solid #3b82f6;
+        border-radius: 8px;
+        padding: 0.9rem 1.2rem;
+        color: #1e293b;
+        font-size: 0.96rem;
+        line-height: 1.6;
+        margin-bottom: 1.2rem;
+    }
+    .guide-sop-box {
+        background: #ffffff;
+        border: 1px solid #e0e7ff;
+        border-radius: 8px;
+        padding: 1.1rem 1.4rem;
+        color: #334155;
+        font-size: 0.95rem;
+        line-height: 1.65;
+        margin-bottom: 0.8rem;
     }
 
     /* KPI 卡片 */
@@ -123,7 +135,7 @@ st.markdown("""
         font-weight: 700;
     }
 
-    /* 業務項目卡片 */
+    /* 業務項目卡片 (用於各業務分頁) */
     .task-card {
         background: #ffffff;
         border: 1px solid #e2e8f0;
@@ -407,7 +419,7 @@ def render_doc_links(links_text):
             st.markdown(f"- 📄 {line}")
 
 
-# 輔助函式：渲染單張業務卡片
+# 輔助函式：渲染單張業務卡片 (用於 5 大業務分頁)
 def render_task_card(task):
     has_highlight = bool(task.get("update_highlight") and str(task["update_highlight"]).strip())
     card_class = "task-card task-card-highlighted" if has_highlight else "task-card"
@@ -431,7 +443,6 @@ def render_task_card(task):
     </div>
     """, unsafe_allow_html=True)
     
-    # 若有最新異動/宣導重點，置頂呈現紅字醒目橫幅
     if has_highlight:
         st.markdown(f"""
         <div class="highlight-banner">
@@ -439,14 +450,12 @@ def render_task_card(task):
         </div>
         """, unsafe_allow_html=True)
 
-    # 可折疊之完整 SOP 與法規說明
     with st.expander("📖 查看完整 SOP 作業規範、工作內容細節與附件連結", expanded=False):
         if task.get("content_detail") and task["content_detail"].strip():
             st.markdown(task["content_detail"])
         else:
             st.info("暫無詳細 SOP 內容，承辦人可於維護模式補充。")
         
-        # 相關表單與下載
         if task.get("doc_links"):
             st.markdown("---")
             render_doc_links(task["doc_links"])
@@ -469,13 +478,13 @@ if st.session_state["is_admin"]:
 tabs = st.tabs(tab_names)
 
 
-# === 1. 專業義消承辦人 Tab (動態載入與展示) ===
+# === 1. 專業義消承辦人 Tab (★ 只顯示情境說明與 SOP 兩項資料，精簡俐落！) ===
 with tabs[0]:
     st.markdown("""
     <div style="background: linear-gradient(to right, #eff6ff, #f8fafc); border: 1px solid #bfdbfe; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.5rem;">
         <h3 style="color: #1e3a8a; margin-top: 0; margin-bottom: 0.4rem;">🎖️ 專業義消承辦人 — 四大實務情境作業導航</h3>
         <p style="color: #475569; font-size: 0.95rem; margin-bottom: 0;">
-            專為分隊與科內義消承辦人量身打造之實務情境導引，依序整合第一線最常處理的「人員名冊、福利諮詢、救災協勤、活動補助」核心資源與作業系統。（內容可於維護模式線上調整）
+            專為分隊與科內義消承辦人量身打造之實務情境導引，僅呈現「情境說明」與「SOP 作業要點及系統連結」，直覺易讀、無多餘雜訊。
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -485,27 +494,26 @@ with tabs[0]:
     guides = db.get_all_guides()
 
     for g in guides:
-        badge_html = f"<span class='guide-target-badge'>{g['target_badge']}</span>" if g.get('target_badge') else ""
+        badge_html = f"<span class='guide-clean-badge'>{g['target_badge']}</span>" if g.get('target_badge') else ""
         icon = g.get('icon') or "📌"
 
+        # 頂部情境標題與情境說明
         st.markdown(f"""
-        <div class="guide-card">
-            <div class="guide-card-header">
-                <span class="guide-icon">{icon}</span>
-                <div>
-                    <span class="guide-title">{g['title']}</span>
-                    {badge_html}
-                </div>
+        <div class="guide-clean-container">
+            <div class="guide-clean-header">
+                <span style="font-size: 1.5rem; margin-right: 0.6rem;">{icon}</span>
+                <span class="guide-clean-title">{g['title']}</span>
+                {badge_html}
             </div>
-            <div style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
+            <div class="guide-desc-box">
+                <strong>📌 情境說明</strong>：<br>
                 {g['description']}
             </div>
-        </div>
         """, unsafe_allow_html=True)
 
-        # 找出關聯任務卡片
+        # 查找關聯任務並直接展開呈現 SOP 與連結 (無多餘外框、無承辦人/更新時間等雜訊)
         linked_titles = [t.strip() for t in (g.get("linked_task_titles") or "").splitlines() if t.strip()]
-        matched_any = False
+        matched_tasks = []
         for l_title in linked_titles:
             matching_task = all_tasks_dict.get(l_title)
             if not matching_task:
@@ -513,14 +521,33 @@ with tabs[0]:
                     if l_title in k or k in l_title:
                         matching_task = v
                         break
-            if matching_task:
-                render_task_card(matching_task)
-                matched_any = True
-        
-        if not matched_any and linked_titles:
-            st.caption(f"💡 本情境關聯業務：{', '.join(linked_titles)} (尚未建立對應卡片)")
+            if matching_task and matching_task not in matched_tasks:
+                matched_tasks.append(matching_task)
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        if matched_tasks:
+            for mt in matched_tasks:
+                st.markdown(f"""
+                <div class="guide-sop-box">
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #1e3a8a; margin-bottom: 0.6rem;">
+                        📋 【{mt['title']}】SOP 作業規範與指引
+                    </div>
+                """, unsafe_allow_html=True)
+
+                if mt.get("content_detail") and mt["content_detail"].strip():
+                    st.markdown(mt["content_detail"])
+                else:
+                    st.info("暫無 SOP 內容說明。")
+
+                if mt.get("doc_links") and mt["doc_links"].strip():
+                    st.markdown("<div style='margin-top:0.6rem;'>", unsafe_allow_html=True)
+                    render_doc_links(mt["doc_links"])
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+                st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.info("暫無對應之 SOP 資料。")
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # === 2. 義消業務 Tab ===
@@ -652,12 +679,12 @@ with tabs[6]:
 
     col_fb_form, col_fb_list = st.columns([4, 6])
 
-    # 左側：填寫反映表單
+    # 左側：填寫反映表單 (以實際單位海山、慈福、新莊、特搜等為預設範例)
     with col_fb_form:
         st.markdown("#### ✍️ 我要提問 / 反映問題")
         with st.form("add_feedback_form", clear_on_submit=True):
-            fb_unit = st.text_input("所屬單位 / 分隊 *", placeholder="例：海山分隊、慈福分隊、特搜分隊...")
-            fb_submitter = st.text_input("提報人姓名 / 職稱 (選填，可匿名)", placeholder="例：林分隊長、王小隊長、張隊員...")
+            fb_unit = st.text_input("所屬單位 / 分隊 *", placeholder="例：海山分隊、慈福分隊、新莊分隊、特搜分隊...")
+            fb_submitter = st.text_input("提報人姓名 / 職稱 (選填，可匿名)", placeholder="例：林分隊長、王小隊長、蕭隊員...")
             fb_category = st.selectbox("反映業務類別 *", db.FEEDBACK_CATEGORIES)
             fb_contact = st.text_input("聯絡電話 / 公務分機 / 信箱 (選填)", placeholder="方便科內承辦人與您直接聯繫說明")
             fb_content = st.text_area("反映內容 / 問題說明 / 具體建議 *", placeholder="請詳細描述您的問題、遇到的困難或改進建議...", height=160)
@@ -751,7 +778,7 @@ if st.session_state["is_admin"]:
         # 子分頁 1: st.data_editor 批次編輯
         with subtab1:
             st.markdown("#### 📋 批次表格編輯器 (`st.data_editor`)")
-            st.caption("可雙擊任一儲存格修改文字、承辦人、狀態或最新異動重點，修改完成後請點擊下方「💾 儲存所有表格修改」按鈕寫入資料庫。（※ 於此修改的業務內容會自動同步連動首頁「專業義消承辦人」中的對應卡片！）")
+            st.caption("可雙擊任一儲存格修改文字、承辦人、狀態或最新異動重點，修改完成後請點擊下方「💾 儲存所有表格修改」按鈕寫入資料庫。（※ 於此修改的業務內容會自動同步連動首頁「專業義消承辦人」中的對應 SOP 與連結！）")
             
             df_current = db.get_all_tasks_df()
             
@@ -787,7 +814,7 @@ if st.session_state["is_admin"]:
         # 子分頁 2: 專業義消承辦人情境導引維護
         with subtab2:
             st.markdown("#### 🎖️ 「專業義消承辦人」四大情境說明與關聯業務維護")
-            st.caption("您可以在此自由修改第一大項各情境的標題、圖示、指引文字，以及要附加顯示哪幾項業務卡片！")
+            st.caption("您可以在此自由修改第一大項各情境的標題、圖示、情境說明文字，以及要附加顯示哪幾項業務的 SOP！")
             
             guides_list = db.get_all_guides()
             all_task_titles = [t["title"] for t in db.get_all_tasks_df().to_dict("records")]
@@ -806,17 +833,17 @@ if st.session_state["is_admin"]:
                 with col_g3:
                     edit_g_badge = st.text_input("右上標籤文字", value=cur_g["target_badge"] or "")
 
-                edit_g_desc = st.text_area("情境引導與說明文字 (支援 Markdown)", value=cur_g["description"] or "", height=140)
+                edit_g_desc = st.text_area("情境說明文字 (支援 Markdown)", value=cur_g["description"] or "", height=120)
                 
-                st.markdown("**🔗 關聯業務卡片設定 (在前台此情境下展示的業務項目卡片)：**")
+                st.markdown("**🔗 關聯業務 SOP 設定 (在前台此情境下直接展示其 SOP 與系統連結)：**")
                 default_linked = [t.strip() for t in (cur_g["linked_task_titles"] or "").splitlines() if t.strip()]
                 valid_defaults = [t for t in default_linked if t in all_task_titles]
                 
                 selected_tasks = st.multiselect(
-                    "選擇要在此情境下展開展示的業務項目",
+                    "選擇要在此情境下展示 SOP 的業務項目",
                     options=all_task_titles,
                     default=valid_defaults,
-                    help="可複選多個業務，前台會自動將這些業務的最新 SOP、連結與異動重點卡片完整呈現於該情境中！"
+                    help="可複選多個業務，前台第一大項會直接呈現所選業務的最新 SOP 作業指引與連結按鈕。"
                 )
 
                 submit_guide = st.form_submit_button("💾 儲存此情境導引設定", type="primary", use_container_width=True)
