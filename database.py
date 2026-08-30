@@ -454,8 +454,42 @@ def get_all_tasks_df() -> pd.DataFrame:
     return df
 
 
-def get_tasks_by_filter(category=None, owner=None, status=None, search_query=None, only_highlight=False):
-    """依條件查詢任務清單"""
+
+def get_subcategories_list(category=None):
+    """取得所有子項目/分項清單 (依業務分類動態取得)"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if category and category != "全部業務":
+        cursor.execute("SELECT DISTINCT subcategory FROM TaskDatabase WHERE category = ? AND subcategory IS NOT NULL AND TRIM(subcategory) != '' ORDER BY subcategory", (category,))
+    else:
+        cursor.execute("SELECT DISTINCT subcategory FROM TaskDatabase WHERE subcategory IS NOT NULL AND TRIM(subcategory) != '' ORDER BY subcategory")
+    subcats = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return subcats
+
+
+def get_owners_list():
+    """取得所有獨立承辦人清單 (自動拆分多位承辦人姓名)"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT owner FROM TaskDatabase WHERE owner IS NOT NULL AND TRIM(owner) != ''")
+    raw_owners = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    
+    unique_owners = set()
+    for o_str in raw_owners:
+        split_names = re.split(r'[,、;\s/]+', o_str)
+        for name in split_names:
+            name = name.strip()
+            if name:
+                unique_owners.add(name)
+    return sorted(list(unique_owners))
+
+
+def get_tasks_by_filter(category=None, subcategory=None, owner=None, status=None, search_query=None, only_highlight=False):
+    """依條件查詢任務清單 (支援子項目篩選與模糊承辦人比對)"""
     init_db()
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -467,9 +501,13 @@ def get_tasks_by_filter(category=None, owner=None, status=None, search_query=Non
         query += " AND category = ?"
         params.append(category)
 
+    if subcategory and subcategory not in ["全部子項目", "全部分項", "全部項目"]:
+        query += " AND subcategory = ?"
+        params.append(subcategory)
+
     if owner and owner != "全部承辦人":
-        query += " AND owner = ?"
-        params.append(owner)
+        query += " AND owner LIKE ?"
+        params.append(f"%{owner}%")
 
     if status and status != "全部狀態":
         query += " AND status = ?"
@@ -611,17 +649,6 @@ def delete_task(task_id):
     cursor.execute("DELETE FROM TaskDatabase WHERE id = ?", (task_id,))
     conn.commit()
     conn.close()
-
-
-def get_owners_list():
-    """取得所有承辦人清單"""
-    init_db()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT owner FROM TaskDatabase WHERE owner IS NOT NULL AND TRIM(owner) != '' ORDER BY owner")
-    owners = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return owners
 
 
 def get_summary_stats():

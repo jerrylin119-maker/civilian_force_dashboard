@@ -302,13 +302,24 @@ with st.sidebar:
     st.caption("🏢 臺東縣消防局 民力訓練科")
     st.markdown("---")
 
-    # 1. 全域搜尋與篩選
-    st.subheader("🔍 業務檢索與篩選")
+    # 1. 全域搜尋與多維動態篩選
+    st.subheader("🔍 業務檢索與分項篩選")
     search_query = st.text_input("關鍵字全域搜尋", placeholder="搜尋業務名稱、SOP、子項目...", help="支援搜尋業務標題、子項目、承辦人、SOP 詳細內容與異動宣導重點")
     
+    # 業務大項篩選
+    all_categories_opt = ["全部業務"] + db.CATEGORIES
+    selected_category = st.selectbox("依業務大項篩選", all_categories_opt)
+
+    # 業務子項目/分項篩選 (自動依大項連動並自動產生分項清單！)
+    available_subcats = db.get_subcategories_list(selected_category)
+    subcat_options = ["全部分項"] + available_subcats
+    selected_subcategory = st.selectbox("依分項 / 子項目篩選", subcat_options, help="系統自動依資料庫內之業務分項動態產出")
+
+    # 依承辦人篩選 (自動拆分單一承辦人姓名)
     owners = ["全部承辦人"] + db.get_owners_list()
-    selected_owner = st.selectbox("依承辦人篩選", owners)
+    selected_owner = st.selectbox("依承辦人篩選", owners, help="自動拆分各承辦人姓名，支援精準個別篩選")
     
+    # 依執行狀態篩選
     statuses = ["全部狀態"] + db.STATUSES
     selected_status = st.selectbox("依執行狀態篩選", statuses)
     
@@ -567,6 +578,7 @@ with tabs[1]:
     
     tasks_cat = db.get_tasks_by_filter(
         category="義消業務",
+        subcategory=selected_subcategory,
         owner=selected_owner,
         status=selected_status,
         search_query=search_query,
@@ -587,6 +599,7 @@ with tabs[2]:
     
     tasks_cat = db.get_tasks_by_filter(
         category="義消福利",
+        subcategory=selected_subcategory,
         owner=selected_owner,
         status=selected_status,
         search_query=search_query,
@@ -623,6 +636,7 @@ with tabs[3]:
 
     tasks_cat = db.get_tasks_by_filter(
         category="補捐助業務",
+        subcategory=selected_subcategory,
         owner=selected_owner,
         status=selected_status,
         search_query=search_query,
@@ -643,6 +657,7 @@ with tabs[4]:
     
     tasks_cat = db.get_tasks_by_filter(
         category="訓練業務",
+        subcategory=selected_subcategory,
         owner=selected_owner,
         status=selected_status,
         search_query=search_query,
@@ -663,6 +678,7 @@ with tabs[5]:
     
     tasks_cat = db.get_tasks_by_filter(
         category="其他推動業務",
+        subcategory=selected_subcategory,
         owner=selected_owner,
         status=selected_status,
         search_query=search_query,
