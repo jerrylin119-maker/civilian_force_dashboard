@@ -1077,9 +1077,40 @@ if st.session_state["is_admin"]:
                             set_flash_message(f"✅ 已永久刪除 ID #{selected_id}【{current_item['title']}】！", msg_type="warning", icon="🗑️")
                             st.rerun()
 
-        # 子分頁 6: 資料庫重設
+        # 子分頁 6: 資料庫備份、上傳還原與重設
         with subtab6:
-            st.markdown("#### 🔄 資料庫管理與重設")
+            st.markdown("#### 💾 資料庫永續備份與 1 鍵上傳還原")
+            st.info("💡 **防資料遺失指南**：當您在線上修改完業務資料後，建議點擊「📥 下載 CSV 完整備份」保存至電腦。若日後重新部署或資料庫更動，只要在此上傳 CSV 備份檔，即可 1 秒瞬間還原所有資料！")
+
+            col_bk1, col_bk2 = st.columns([1, 1])
+            with col_bk1:
+                st.markdown("##### 📥 匯出/下載最新備份")
+                all_df_sub = db.get_all_tasks_df()
+                csv_bk_data = all_df_sub.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                st.download_button(
+                    label="📥 下載最新 CSV 業務備份檔",
+                    data=csv_bk_data,
+                    file_name=f"ttfd_tasks_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            with col_bk2:
+                st.markdown("##### 📤 上傳 CSV 備份檔案進行還原")
+                uploaded_csv = st.file_uploader("選取先前下載的 CSV 備份檔", type=["csv"], key="csv_restore_uploader")
+                if uploaded_csv is not None:
+                    try:
+                        import_df = pd.read_csv(uploaded_csv)
+                        st.success(f"讀取成功！檔案內包含 {len(import_df)} 筆業務資料。")
+                        if st.button("🚀 確認匯入並覆蓋還原資料庫", type="primary", use_container_width=True):
+                            restored_cnt = db.import_tasks_from_df(import_df, replace_all=True)
+                            set_flash_message(f"🎉 成功還原！已從備份檔匯入 {restored_cnt} 筆業務資料至資料庫。", icon="📤")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"檔案解析失敗：{e}")
+
+            st.markdown("---")
+            st.markdown("##### 🔄 重設為初始官方標準業務清單")
             st.warning("⚠️ 重設資料庫將會清除目前的手動修改，並重新匯入臺東縣消防局官方標準業務資料、導引設定與範例留言。")
             confirm_reseed = st.checkbox("我了解這會覆蓋目前的自訂資料並重設為官方清單資料")
             if st.button("🔄 重新初始化資料庫 (重設為科內官方業務清單)", disabled=not confirm_reseed, type="primary"):

@@ -786,3 +786,39 @@ def clear_all_feedbacks():
     cursor.execute("DELETE FROM FeedbackDatabase")
     conn.commit()
     conn.close()
+
+def import_tasks_from_df(df: pd.DataFrame, replace_all=True):
+    """從上傳的 DataFrame 匯入/還原業務資料表"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if replace_all:
+        cursor.execute("DELETE FROM TaskDatabase")
+    
+    count = 0
+    for _, row in df.iterrows():
+        cat = str(row.get("category", "")).strip() if pd.notna(row.get("category")) else "義消業務"
+        subcat = str(row.get("subcategory", "")).strip() if pd.notna(row.get("subcategory")) else ""
+        title = str(row.get("title", "")).strip() if pd.notna(row.get("title")) else ""
+        if not title:
+            continue
+        owner = str(row.get("owner", "")).strip() if pd.notna(row.get("owner")) else ""
+        status = str(row.get("status", "常態辦理")).strip() if pd.notna(row.get("status")) else "常態辦理"
+        highlight = str(row.get("update_highlight", "")).strip() if pd.notna(row.get("update_highlight")) else ""
+        content = str(row.get("content_detail", "")).strip() if pd.notna(row.get("content_detail")) else ""
+        doc_links = str(row.get("doc_links", "")).strip() if pd.notna(row.get("doc_links")) else ""
+        updated = str(row.get("last_updated", now_str)).strip() if pd.notna(row.get("last_updated")) else now_str
+
+        cursor.execute("""
+            INSERT INTO TaskDatabase (
+                category, subcategory, title, owner, status,
+                update_highlight, content_detail, doc_links, last_updated
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (cat, subcat, title, owner, status, highlight, content, doc_links, updated))
+        count += 1
+
+    conn.commit()
+    conn.close()
+    return count
