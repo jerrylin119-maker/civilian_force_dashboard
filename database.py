@@ -880,3 +880,89 @@ def search_tasks_for_jump(query_str):
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+def get_full_system_data():
+    """取得全系統所有資料表之完整資料 (包含業務主表、導航情境表、留言回饋表、系統設定)"""
+    init_db()
+    conn = get_db_connection()
+    tasks_df = pd.read_sql_query("SELECT * FROM TaskDatabase ORDER BY id ASC", conn)
+    guides_df = pd.read_sql_query("SELECT * FROM GuideDatabase ORDER BY id ASC", conn)
+    feedbacks_df = pd.read_sql_query("SELECT * FROM FeedbackDatabase ORDER BY id ASC", conn)
+    conn.close()
+    
+    return {
+        "tasks": tasks_df.to_dict(orient="records"),
+        "guides": guides_df.to_dict(orient="records"),
+        "feedbacks": feedbacks_df.to_dict(orient="records"),
+        "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "organization": "臺東縣消防局民力訓練科"
+    }
+
+
+def sync_tasks_from_google_sheet(sheet_url):
+    """從 Google 試算表 (Google Sheets) 連結即時同步業務資料表"""
+    init_db()
+    if not sheet_url or not sheet_url.strip():
+        return False, 0, "請輸入有效的 Google 試算表連結！"
+    
+    clean_url = sheet_url.strip()
+    
+    # 自動將 Google Sheets 檢視/編輯連結轉換為 CSV 匯出端點
+    if "docs.google.com/spreadsheets" in clean_url:
+        if "/edit" in clean_url:
+            clean_url = clean_url.split("/edit")[0] + "/export?format=csv"
+        elif not clean_url.endswith("format=csv") and "export?" not in clean_url:
+            if "?" in clean_url:
+                clean_url = clean_url + "&export?format=csv"
+            else:
+                clean_url = clean_url + "/export?format=csv"
+                
+    try:
+        df = pd.read_csv(clean_url)
+        
+        # 智慧欄位對照轉換
+        col_map = {
+            "分類": "category", "業務分類": "category",
+            "子項目": "subcategory", "分項": "subcategory",
+            "業務項目名稱": "title", "業務名稱": "title", "標題": "title",
+            "承辦人": "owner", "科內承辦人": "owner",
+            "執行狀態": "status", "狀態": "status",
+            "最新異動重點": "update_highlight", "異動重點": "update_highlight", "紅字重點": "update_highlight",
+            "詳細工作內容": "content_detail", "SOP": "content_detail", "詳細SOP": "content_detail", "工作內容": "content_detail",
+            "相關連結": "doc_links", "表單連結": "doc_links", "雲端連結": "doc_links", "附件連結": "doc_links"
+        }
+        df = df.rename(columns=col_map)
+        
+        # 驗證必要欄位
+        if "title" not in df.columns:
+            return False, 0, "試算表中找不到「業務項目名稱」或「title」欄位，請檢查試算表標頭！"
+            
+        count = import_tasks_from_df(df, replace_all=True)
+        
+        # 紀錄雲端同步設定
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('gsheet_url', ?)", (sheet_url.strip(),))
+        cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('last_gsheet_sync', ?)", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
+        conn.commit()
+        conn.close()
+        
+        return True, count, "同步成功"
+    except Exception as e:
+        return False, 0, f"無法讀取 Google 試算表：{str(e)}（請確認試算表已開啟「知道連結的使用者均可檢視」權限）"
+
+
+def get_gsheet_sync_info():
+    """取得 Google 試算表同步設定資訊"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM SystemMeta WHERE key = 'gsheet_url'")
+    row_url = cursor.fetchone()
+    url = row_url[0] if row_url else ""
+    
+    cursor.execute("SELECT value FROM SystemMeta WHERE key = 'last_gsheet_sync'")
+    row_time = cursor.fetchone()
+    sync_time = row_time[0] if row_time else "尚未同步"
+    conn.close()
+    return url, sync_time

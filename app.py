@@ -1,3 +1,4 @@
+import json
 # -*- coding: utf-8 -*-
 """
 app.py - 臺東縣消防局民力訓練科 業務知識動態看板
@@ -1221,27 +1222,103 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                         set_flash_message(f"✅ 已永久刪除 ID #{selected_id}【{current_item['title']}】！", msg_type="warning", icon="🗑️")
                         st.rerun()
 
-    # 子分頁 6: 資料庫備份、上傳還原與重設
+    # 子分頁 6: 資料庫完整匯出、Google 試算表雲端連動與還原
     with subtab6:
-        st.markdown("#### 💾 資料庫永續備份與 1 鍵上傳還原")
-        st.info("💡 **防資料遺失指南**：當您在線上修改完業務資料後，建議點擊「📥 下載 CSV 完整備份」保存至電腦。若日後重新部署或資料庫更動，只要在此上傳 CSV 備份檔，即可 1 秒瞬間還原所有資料！")
+        st.markdown("#### 💾 資料庫完整匯出、Google 試算表連動與備份還原")
+        st.info("💡 **資料永續與多人協作方案**：您可以隨時將全系統所有資料表打包匯出，或直接綁定 **Google 試算表 (Google Sheets)**，科內承辦人只需在 Google 試算表填寫更新，看板點擊按鈕即可 1 秒同步！")
 
-        col_bk1, col_bk2 = st.columns([1, 1])
-        with col_bk1:
-            st.markdown("##### 📥 匯出/下載最新備份")
-            all_df_sub = db.get_all_tasks_df()
-            csv_bk_data = all_df_sub.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        # 區塊 1: Google 試算表 (Google Sheets) 雲端連動
+        st.markdown("##### 🌐 1. 綁定 Google 試算表 (Google Sheets) 即時雲端連動")
+        saved_gsheet_url, last_sync_time = db.get_gsheet_sync_info()
+        
+        with st.form("gsheet_sync_form"):
+            st.caption("請將科內 Google 試算表的共用權限設為「**知道連結的使用者均可檢視**」，並將試算表網址貼在下方：")
+            input_gsheet_url = st.text_input(
+                "Google 試算表網址 (Google Sheets URL)",
+                value=saved_gsheet_url,
+                placeholder="例如：https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
+            )
+            col_gs1, col_gs2 = st.columns([1, 1])
+            with col_gs1:
+                btn_sync_now = st.form_submit_button("🔄 立即從 Google 試算表同步業務資料", type="primary", use_container_width=True)
+            with col_gs2:
+                st.caption(f"🕒 前次雲端同步時間：**{last_sync_time}**")
+
+            if btn_sync_now:
+                if not input_gsheet_url.strip():
+                    st.error("請輸入 Google 試算表網址！")
+                else:
+                    success, s_count, s_msg = db.sync_tasks_from_google_sheet(input_gsheet_url)
+                    if success:
+                        set_flash_message(f"🎉 成功同步！已從 Google 試算表匯入 {s_count} 筆最新業務資料，看板已即時更新。", icon="🌐")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {s_msg}")
+
+        st.markdown("---")
+
+        # 區塊 2: 全系統多資料表完整匯出
+        st.markdown("##### 📦 2. 全系統完整資料匯出與打包備份")
+        st.caption("此處提供「全系統完整整合資料包 (JSON)」以及個別資料表的完整 CSV 匯出（包含業務主表、承辦人導航情境表、我有話要說同仁留言表全部欄位）。")
+        
+        col_exp1, col_exp2, col_exp3, col_exp4 = st.columns(4)
+        
+        # 全系統 JSON 打包 (含所有資料表全部內容)
+        full_sys_data = db.get_full_system_data()
+        json_full_str = json.dumps(full_sys_data, ensure_ascii=False, indent=2).encode("utf-8")
+        with col_exp1:
             st.download_button(
-                label="📥 下載最新 CSV 業務備份檔",
-                data=csv_bk_data,
-                file_name=f"ttfd_tasks_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                label="📦 下載【全系統完整備份包】(JSON)",
+                data=json_full_str,
+                file_name=f"ttfd_minli_FULL_SYSTEM_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                use_container_width=True,
+                help="包含業務主表、4大情境導引設定、同仁留言與回覆全部資料"
+            )
+
+        # 業務主表 CSV
+        all_tasks_df_exp = db.get_all_tasks_df()
+        csv_tasks_bytes = all_tasks_df_exp.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        with col_exp2:
+            st.download_button(
+                label="📋 下載【業務清單主表】(CSV)",
+                data=csv_tasks_bytes,
+                file_name=f"ttfd_tasks_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
 
-        with col_bk2:
-            st.markdown("##### 📤 上傳 CSV 備份檔案進行還原")
-            uploaded_csv = st.file_uploader("選取先前下載的 CSV 備份檔", type=["csv"], key="csv_restore_uploader")
+        # 專業義消承辦人情境導引 CSV
+        guides_df_exp = pd.DataFrame(db.get_all_guides())
+        csv_guides_bytes = guides_df_exp.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        with col_exp3:
+            st.download_button(
+                label="🎖️ 下載【情境導引設定】(CSV)",
+                data=csv_guides_bytes,
+                file_name=f"ttfd_guides_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+        # 我有話要說留言清單 CSV
+        fbs_df_exp = pd.DataFrame(db.get_all_feedbacks())
+        csv_fbs_bytes = fbs_df_exp.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        with col_exp4:
+            st.download_button(
+                label="💬 下載【我有話要說留言】(CSV)",
+                data=csv_fbs_bytes,
+                file_name=f"ttfd_feedbacks_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+        st.markdown("---")
+
+        # 區塊 3: 上傳 CSV 還原與初始重設
+        st.markdown("##### 📤 3. 上傳 CSV 備份檔案進行還原 / 重設")
+        col_res1, col_res2 = st.columns([1, 1])
+        with col_res1:
+            uploaded_csv = st.file_uploader("選取先前的業務主表 CSV 備份檔上傳還原", type=["csv"], key="csv_restore_uploader_v2")
             if uploaded_csv is not None:
                 try:
                     import_df = pd.read_csv(uploaded_csv)
@@ -1253,11 +1330,10 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                 except Exception as e:
                     st.error(f"檔案解析失敗：{e}")
 
-        st.markdown("---")
-        st.markdown("##### 🔄 重設為初始官方標準業務清單")
-        st.warning("⚠️ 重設資料庫將會清除目前的手動修改，並重新匯入臺東縣消防局官方標準業務資料、導引設定與範例留言。")
-        confirm_reseed = st.checkbox("我了解這會覆蓋目前的自訂資料並重設為官方清單資料")
-        if st.button("🔄 重新初始化資料庫 (重設為科內官方業務清單)", disabled=not confirm_reseed, type="primary"):
-            db.init_db(force_reseed=True)
-            set_flash_message("🎉 資料庫已成功重設為臺東縣消防局官方標準業務清單與預設資料！", icon="🔄")
-            st.rerun()
+        with col_res2:
+            st.warning("⚠️ **重設為官方標準清單**：將會清除目前所有修改並重新載入官方預設清單。")
+            confirm_reseed = st.checkbox("確認要重設為初始官方標準業務清單", key="chk_reseed_final")
+            if st.button("🔄 重新初始化資料庫", disabled=not confirm_reseed, type="secondary", use_container_width=True):
+                db.init_db(force_reseed=True)
+                set_flash_message("🎉 資料庫已成功重設為臺東縣消防局官方標準業務清單與預設資料！", icon="🔄")
+                st.rerun()
