@@ -12,6 +12,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 import os
+import re
 
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(DB_DIR, "minli_tasks.db")
