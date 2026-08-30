@@ -25,7 +25,52 @@ st.set_page_config(
 )
 
 # 初始化資料庫
+# 初始化資料庫
 db.init_db()
+
+# 安全查詢封裝函式 (防止任何雲端模組快取導致的 AttributeError)
+def get_tasks_for_officer(officer_name):
+    """安全取得指定承辦人負責之所有業務項目"""
+    try:
+        if hasattr(db, "get_tasks_for_officer"):
+            return db.get_tasks_for_officer(officer_name)
+    except Exception:
+        pass
+    try:
+        conn = db.get_db_connection()
+        cursor = conn.cursor()
+        if not officer_name or officer_name == "全部承辦人":
+            cursor.execute("SELECT id, category, subcategory, title, owner, status FROM TaskDatabase ORDER BY category, id")
+        else:
+            cursor.execute("SELECT id, category, subcategory, title, owner, status FROM TaskDatabase WHERE owner LIKE ? ORDER BY category, id", (f"%{officer_name}%",))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    except Exception:
+        return []
+
+def search_tasks_for_jump(query_str):
+    """安全全文檢索業務項目清單"""
+    try:
+        if hasattr(db, "search_tasks_for_jump"):
+            return db.search_tasks_for_jump(query_str)
+    except Exception:
+        pass
+    try:
+        conn = db.get_db_connection()
+        cursor = conn.cursor()
+        q = f"%{query_str.strip()}%"
+        cursor.execute("""
+            SELECT id, category, subcategory, title, owner, status 
+            FROM TaskDatabase 
+            WHERE title LIKE ? OR subcategory LIKE ? OR owner LIKE ? OR content_detail LIKE ? OR update_highlight LIKE ?
+            ORDER BY category, id
+        """, (q, q, q, q, q))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    except Exception:
+        return []
 
 # 初始化 Session State
 if "is_admin" not in st.session_state:
@@ -374,7 +419,7 @@ with st.sidebar:
     st.session_state["selected_sidebar_owner"] = sel_owner
 
     # 即時顯示該承辦人負責的所有業務項目清單 (點擊直達該頁面)
-    officer_tasks = db.get_tasks_for_officer(sel_owner)
+    officer_tasks = get_tasks_for_officer(sel_owner)
     
     if sel_owner != "全部承辦人":
         st.markdown(f"**📋 【{sel_owner}】負責業務 ({len(officer_tasks)} 項，點擊直達)：**")
@@ -415,7 +460,7 @@ with st.sidebar:
             st.rerun()
 
     if st.session_state["search_query"]:
-        search_results = db.search_tasks_for_jump(st.session_state["search_query"])
+        search_results = search_tasks_for_jump(st.session_state["search_query"])
         st.markdown(f"**🔎 搜尋「{st.session_state['search_query']}」結果 ({len(search_results)} 項)：**")
         if not search_results:
             st.caption("無符合關鍵字的業務項目。")
