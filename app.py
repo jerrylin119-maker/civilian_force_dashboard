@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-app.py - 民力科業務知識動態看板
+app.py - 臺東縣消防局民力訓練科 業務知識動態看板
 Streamlit 主程式：
 1. 專業義消承辦人情境導引 (僅精純呈現情境說明與SOP/系統連結，不顯示多餘卡片標籤)
 2. 5大業務分類分頁與全域搜尋
 3. 最新異動紅字醒目提示
-4. 我有話要說雙向回饋與回覆看板 (支援單筆刪除、一鍵清空)
+4. 我有話要說雙向回饋與回覆看板 (以臺東縣消防局四大外勤大隊與各分隊為選填範例)
 5. 科內承辦人維護模式 (Excel批次編輯、單筆維護、導引維護、留言管理)
 """
 
@@ -17,7 +17,7 @@ import database as db
 
 # 頁面配置
 st.set_page_config(
-    page_title="民力科業務知識動態看板",
+    page_title="臺東縣消防局民力訓練科 — 業務知識動態看板",
     page_icon="🚒",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -31,7 +31,7 @@ st.markdown("""
 <style>
     /* 全域字體與色彩 */
     .main-header {
-        background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 50%, #2563eb 100%);
+        background: linear-gradient(135deg, #0f2b48 0%, #1e3a8a 50%, #2563eb 100%);
         color: white;
         padding: 1.4rem 2rem;
         border-radius: 12px;
@@ -258,17 +258,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 系統頂部橫幅
+# 系統頂部橫幅 (標註臺東縣消防局民力訓練科)
 st.markdown("""
 <div class="main-header">
     <div style="display: flex; align-items: center; justify-content: space-between;">
         <div>
-            <h1>🚒 民力科業務知識動態看板</h1>
-            <p>Civilian & Volunteer Force Division Management & Knowledge Portal | 專業義消承辦人導引 • 最新異動醒目提示 • 我有話要說雙向回饋</p>
+            <h1>🚒 臺東縣消防局民力訓練科 — 業務知識動態看板</h1>
+            <p>Taitung County Fire Bureau - Civilian & Volunteer Force Training Division | 專業義消承辦人導引 • 最新異動醒目提示 • 我有話要說雙向回饋</p>
         </div>
         <div style="text-align: right; font-size: 0.85rem; opacity: 0.9;">
             📅 資料庫狀態：<strong>已連線</strong><br>
-            🏢 消防局民力運用科
+            🏢 臺東縣消防局 民力訓練科
         </div>
     </div>
 </div>
@@ -282,6 +282,7 @@ if "is_admin" not in st.session_state:
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/fire-truck.png", width=60)
     st.title("民力看板控制台")
+    st.caption("🏢 臺東縣消防局 民力訓練科")
     st.markdown("---")
 
     # 1. 全域搜尋與篩選
@@ -308,7 +309,7 @@ with st.sidebar:
                 st.success("✅ 已切換至科內維護模式！")
                 st.rerun()
             else:
-                st.error("❌ 密碼錯誤，請洽民力科系統管理員。")
+                st.error("❌ 密碼錯誤，請洽民力訓練科系統管理員。")
     else:
         st.success("🟢 已啟用維護權限（可即時編輯與回覆留言）")
         if st.button("🔒 鎖定 / 退出維護模式", use_container_width=True):
@@ -325,7 +326,7 @@ with st.sidebar:
     st.download_button(
         label="📥 匯出完整 CSV 備份",
         data=csv_data,
-        file_name=f"minli_tasks_backup_{datetime.now().strftime('%Y%m%d')}.csv",
+        file_name=f"ttfd_minli_tasks_backup_{datetime.now().strftime('%Y%m%d')}.csv",
         mime="text/csv",
         use_container_width=True
     )
@@ -334,7 +335,7 @@ with st.sidebar:
     st.download_button(
         label="📥 匯出 JSON 結構檔",
         data=json_data,
-        file_name=f"minli_tasks_backup_{datetime.now().strftime('%Y%m%d')}.json",
+        file_name=f"ttfd_minli_tasks_backup_{datetime.now().strftime('%Y%m%d')}.json",
         mime="application/json",
         use_container_width=True
     )
@@ -478,13 +479,13 @@ if st.session_state["is_admin"]:
 tabs = st.tabs(tab_names)
 
 
-# === 1. 專業義消承辦人 Tab (★ 只顯示情境說明與 SOP 兩項資料，精簡俐落！) ===
+# === 1. 專業義消承辦人 Tab (★ 僅顯示情境說明與 SOP 兩項資料) ===
 with tabs[0]:
     st.markdown("""
     <div style="background: linear-gradient(to right, #eff6ff, #f8fafc); border: 1px solid #bfdbfe; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.5rem;">
         <h3 style="color: #1e3a8a; margin-top: 0; margin-bottom: 0.4rem;">🎖️ 專業義消承辦人 — 四大實務情境作業導航</h3>
         <p style="color: #475569; font-size: 0.95rem; margin-bottom: 0;">
-            專為分隊與科內義消承辦人量身打造之實務情境導引，僅呈現「情境說明」與「SOP 作業要點及系統連結」，直覺易讀、無多餘雜訊。
+            專為臺東縣各外勤大隊、分隊義消承辦人量身打造之實務情境導引，僅呈現「情境說明」與「SOP 作業要點及系統連結」，直覺易讀、無多餘雜訊。
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -497,7 +498,6 @@ with tabs[0]:
         badge_html = f"<span class='guide-clean-badge'>{g['target_badge']}</span>" if g.get('target_badge') else ""
         icon = g.get('icon') or "📌"
 
-        # 頂部情境標題與情境說明
         st.markdown(f"""
         <div class="guide-clean-container">
             <div class="guide-clean-header">
@@ -511,7 +511,6 @@ with tabs[0]:
             </div>
         """, unsafe_allow_html=True)
 
-        # 查找關聯任務並直接展開呈現 SOP 與連結 (無多餘外框、無承辦人/更新時間等雜訊)
         linked_titles = [t.strip() for t in (g.get("linked_task_titles") or "").splitlines() if t.strip()]
         matched_tasks = []
         for l_title in linked_titles:
@@ -649,7 +648,7 @@ with tabs[4]:
 # === 6. 其他推動業務 Tab ===
 with tabs[5]:
     st.markdown("### 【🌟 其他推動業務】")
-    st.caption("👤 **科內承辦人**：民力科全體同仁")
+    st.caption("👤 **科內承辦人**：民力訓練科全體同仁")
     
     tasks_cat = db.get_tasks_by_filter(
         category="其他推動業務",
@@ -666,25 +665,25 @@ with tabs[5]:
             render_task_card(t)
 
 
-# === 7. 我有話要說 Tab ===
+# === 7. 我有話要說 Tab (支援臺東縣各大隊與分隊下拉選單) ===
 with tabs[6]:
     st.markdown("""
     <div style="background: linear-gradient(to right, #ecfdf5, #f0fdf4); border: 1px solid #a7f3d0; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.5rem;">
-        <h3 style="color: #065f46; margin-top: 0; margin-bottom: 0.4rem;">💬 我有話要說 — 義消承辦人與分隊同仁雙向回饋專區</h3>
+        <h3 style="color: #065f46; margin-top: 0; margin-bottom: 0.4rem;">💬 我有話要說 — 臺東縣義消承辦人與分隊同仁雙向回饋專區</h3>
         <p style="color: #047857; font-size: 0.95rem; margin-bottom: 0;">
-            開放各大隊、中隊、分隊義消承辦人及全體同仁提出實務執行問題、法規諮詢、作業建議或系統回饋。民力科將定期彙整、專人查明並公開回覆！
+            開放臺東大隊、關山大隊、成功大隊、大武大隊各分隊義消承辦人及全體同仁提出實務執行問題、法規諮詢、作業建議或系統回饋。民力訓練科將定期彙整、專人查明並公開回覆！
         </p>
     </div>
     """, unsafe_allow_html=True)
 
     col_fb_form, col_fb_list = st.columns([4, 6])
 
-    # 左側：填寫反映表單 (以實際單位海山、慈福、新莊、特搜等為預設範例)
+    # 左側：填寫反映表單 (下拉選單完整包含臺東縣各分隊)
     with col_fb_form:
         st.markdown("#### ✍️ 我要提問 / 反映問題")
         with st.form("add_feedback_form", clear_on_submit=True):
-            fb_unit = st.text_input("所屬單位 / 分隊 *", placeholder="例：海山分隊、慈福分隊、新莊分隊、特搜分隊...")
-            fb_submitter = st.text_input("提報人姓名 / 職稱 (選填，可匿名)", placeholder="例：林分隊長、王小隊長、蕭隊員...")
+            fb_unit = st.selectbox("所屬單位 / 分隊 *", db.TAITUNG_UNITS)
+            fb_submitter = st.text_input("提報人姓名 / 職稱 (選填，可匿名)", placeholder="例：林分隊長、王小隊長、陳隊員...")
             fb_category = st.selectbox("反映業務類別 *", db.FEEDBACK_CATEGORIES)
             fb_contact = st.text_input("聯絡電話 / 公務分機 / 信箱 (選填)", placeholder="方便科內承辦人與您直接聯繫說明")
             fb_content = st.text_area("反映內容 / 問題說明 / 具體建議 *", placeholder="請詳細描述您的問題、遇到的困難或改進建議...", height=160)
@@ -695,12 +694,12 @@ with tabs[6]:
                     st.error("請務必填寫「所屬單位/分隊」及「反映內容」！")
                 else:
                     new_fb_id = db.add_feedback(fb_unit, fb_submitter, fb_category, fb_content, fb_contact)
-                    st.success(f"🎉 成功送出！留言編號 #{new_fb_id}，民力科承辦人員將盡速為您處理查覆。")
+                    st.success(f"🎉 成功送出！留言編號 #{new_fb_id}，民力訓練科承辦人員將盡速為您處理查覆。")
                     st.rerun()
 
-    # 右側：問題與民力科回覆列表
+    # 右側：問題與民力訓練科回覆列表
     with col_fb_list:
-        st.markdown("#### 📢 同仁意見與民力科官方回覆看板")
+        st.markdown("#### 📢 同仁意見與民力訓練科官方回覆看板")
         
         col_f1, col_f2 = st.columns([1, 1])
         with col_f1:
@@ -748,14 +747,14 @@ with tabs[6]:
                 if fb["admin_reply"] and fb["admin_reply"].strip():
                     st.markdown(f"""
                     <div class="feedback-reply-box" style="margin-top:-0.6rem; margin-bottom:1.2rem;">
-                        <strong>📢 民力科回覆 ({fb['replied_at'] or ''})：</strong><br>
+                        <strong>📢 民力訓練科回覆 ({fb['replied_at'] or ''})：</strong><br>
                         {fb['admin_reply']}
                     </div>
                     """, unsafe_allow_html=True)
                 else:
                     st.markdown("""
                     <div style="font-size:0.85rem; color:#94a3b8; margin-top:-0.4rem; margin-bottom:1.2rem; padding-left:0.5rem;">
-                        ⏳ <em>民力科正查明處理中，請稍候回覆...</em>
+                        ⏳ <em>民力訓練科正查明處理中，請稍候回覆...</em>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -899,7 +898,7 @@ if st.session_state["is_admin"]:
                 with st.form(f"reply_fb_form_{sel_fb_id}"):
                     curr_status_idx = db.FEEDBACK_STATUSES.index(cur_fb["status"]) if cur_fb["status"] in db.FEEDBACK_STATUSES else 0
                     reply_status = st.selectbox("處理狀態", db.FEEDBACK_STATUSES, index=curr_status_idx)
-                    reply_content = st.text_area("民力科官方回覆內容 (將公開於看板供同仁查閱)", value=cur_fb["admin_reply"] or "", height=140)
+                    reply_content = st.text_area("民力訓練科官方回覆內容 (將公開於看板供同仁查閱)", value=cur_fb["admin_reply"] or "", height=140)
                     
                     rep_btn = st.form_submit_button("📢 發布 / 更新官方回覆", type="primary", use_container_width=True)
 
@@ -1034,9 +1033,9 @@ if st.session_state["is_admin"]:
         # 子分頁 6: 資料庫重設
         with subtab6:
             st.markdown("#### 🔄 資料庫管理與重設")
-            st.warning("⚠️ 重設資料庫將會清除目前的手動修改，並重新匯入科內指定的 12 筆官方標準業務資料、導引設定與範例留言。")
+            st.warning("⚠️ 重設資料庫將會清除目前的手動修改，並重新匯入臺東縣消防局官方標準業務資料、導引設定與範例留言。")
             confirm_reseed = st.checkbox("我了解這會覆蓋目前的自訂資料並重設為官方清單資料")
             if st.button("🔄 重新初始化資料庫 (重設為科內官方業務清單)", disabled=not confirm_reseed, type="primary"):
                 db.init_db(force_reseed=True)
-                st.success("✅ 資料庫已成功重設為科內官方業務清單！")
+                st.success("✅ 資料庫已成功重設為臺東縣消防局官方業務清單！")
                 st.rerun()
