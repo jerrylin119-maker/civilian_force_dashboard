@@ -4,7 +4,7 @@ database.py - 民力科業務知識動態看板 資料庫模組
 SQLite 資料庫操作：
 1. 業務主表 (TaskDatabase)
 2. 專業義消承辦人情境導引 (GuideDatabase) - 支援線上動態修改情境與關聯業務
-3. 我有話要說回饋留言板 (FeedbackDatabase)
+3. 我有話要說回饋留言板 (FeedbackDatabase) - 支援單筆刪除與批次清空，修復自動重複長出示範留言之問題
 """
 
 import sqlite3
@@ -212,7 +212,7 @@ SAMPLE_DATA = [
     }
 ]
 
-# 專業義消承辦人 4 大實務情境預設導引資料 (可透過後台線上修改)
+# 專業義消承辦人 4 大實務情境預設導引資料
 SAMPLE_GUIDES = [
     {
         "scenario_num": 1,
@@ -248,7 +248,7 @@ SAMPLE_GUIDES = [
     }
 ]
 
-# 「我有話要說」範例留言初始資料
+# 「我有話要說」初始範例留言 (僅在全新資料庫首次啟動時寫入一次)
 SAMPLE_FEEDBACKS = [
     {
         "unit_name": "海山分隊",
@@ -294,9 +294,17 @@ def get_db_connection():
 
 
 def init_db(force_reseed=False):
-    """初始化資料庫與資料表，若無資料則匯入範例種子資料"""
+    """初始化資料庫與資料表，使用 SystemMeta 控制種子資料，避免刪除留言後自動重複長出"""
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # 系統設定與初始化標記表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS SystemMeta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
 
     # 1. 業務主表 TaskDatabase
     cursor.execute("""
@@ -348,68 +356,72 @@ def init_db(force_reseed=False):
         cursor.execute("DELETE FROM TaskDatabase")
         cursor.execute("DELETE FROM GuideDatabase")
         cursor.execute("DELETE FROM FeedbackDatabase")
+        cursor.execute("DELETE FROM SystemMeta")
         conn.commit()
 
-    # 檢查 TaskDatabase
-    cursor.execute("SELECT COUNT(*) FROM TaskDatabase")
-    if cursor.fetchone()[0] == 0:
-        for item in SAMPLE_DATA:
-            cursor.execute("""
-                INSERT INTO TaskDatabase (
-                    category, subcategory, title, owner, status,
-                    update_highlight, content_detail, doc_links, last_updated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                item["category"],
-                item["subcategory"],
-                item["title"],
-                item["owner"],
-                item["status"],
-                item["update_highlight"],
-                item["content_detail"],
-                item["doc_links"],
-                item["last_updated"]
-            ))
-        conn.commit()
+    # 檢查是否已進行過初次初始化
+    cursor.execute("SELECT value FROM SystemMeta WHERE key = 'initialized'")
+    row = cursor.fetchone()
 
-    # 檢查 GuideDatabase
-    cursor.execute("SELECT COUNT(*) FROM GuideDatabase")
-    if cursor.fetchone()[0] == 0:
-        for g in SAMPLE_GUIDES:
-            cursor.execute("""
-                INSERT INTO GuideDatabase (
-                    scenario_num, icon, title, target_badge, description, linked_task_titles
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                g["scenario_num"],
-                g["icon"],
-                g["title"],
-                g["target_badge"],
-                g["description"],
-                g["linked_task_titles"]
-            ))
-        conn.commit()
+    if not row:
+        # 僅在初次建立資料庫時寫入官方預設資料
+        cursor.execute("SELECT COUNT(*) FROM TaskDatabase")
+        if cursor.fetchone()[0] == 0:
+            for item in SAMPLE_DATA:
+                cursor.execute("""
+                    INSERT INTO TaskDatabase (
+                        category, subcategory, title, owner, status,
+                        update_highlight, content_detail, doc_links, last_updated
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    item["category"],
+                    item["subcategory"],
+                    item["title"],
+                    item["owner"],
+                    item["status"],
+                    item["update_highlight"],
+                    item["content_detail"],
+                    item["doc_links"],
+                    item["last_updated"]
+                ))
 
-    # 檢查 FeedbackDatabase
-    cursor.execute("SELECT COUNT(*) FROM FeedbackDatabase")
-    if cursor.fetchone()[0] == 0:
-        for fb in SAMPLE_FEEDBACKS:
-            cursor.execute("""
-                INSERT INTO FeedbackDatabase (
-                    unit_name, submitter, category, content, contact_info,
-                    status, admin_reply, created_at, replied_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                fb["unit_name"],
-                fb["submitter"],
-                fb["category"],
-                fb["content"],
-                fb["contact_info"],
-                fb["status"],
-                fb["admin_reply"],
-                fb["created_at"],
-                fb["replied_at"]
-            ))
+        cursor.execute("SELECT COUNT(*) FROM GuideDatabase")
+        if cursor.fetchone()[0] == 0:
+            for g in SAMPLE_GUIDES:
+                cursor.execute("""
+                    INSERT INTO GuideDatabase (
+                        scenario_num, icon, title, target_badge, description, linked_task_titles
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    g["scenario_num"],
+                    g["icon"],
+                    g["title"],
+                    g["target_badge"],
+                    g["description"],
+                    g["linked_task_titles"]
+                ))
+
+        cursor.execute("SELECT COUNT(*) FROM FeedbackDatabase")
+        if cursor.fetchone()[0] == 0:
+            for fb in SAMPLE_FEEDBACKS:
+                cursor.execute("""
+                    INSERT INTO FeedbackDatabase (
+                        unit_name, submitter, category, content, contact_info,
+                        status, admin_reply, created_at, replied_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    fb["unit_name"],
+                    fb["submitter"],
+                    fb["category"],
+                    fb["content"],
+                    fb["contact_info"],
+                    fb["status"],
+                    fb["admin_reply"],
+                    fb["created_at"],
+                    fb["replied_at"]
+                ))
+
+        cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('initialized', 'true')")
         conn.commit()
 
     conn.close()
@@ -739,10 +751,20 @@ def reply_feedback(feedback_id, status, admin_reply):
 
 
 def delete_feedback(feedback_id):
-    """刪除指定回饋留言"""
+    """永久刪除指定回饋留言 (不會重複自動長出)"""
     init_db()
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM FeedbackDatabase WHERE id = ?", (feedback_id,))
+    conn.commit()
+    conn.close()
+
+
+def clear_all_feedbacks():
+    """清空所有回饋留言 (包含示範留言)"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM FeedbackDatabase")
     conn.commit()
     conn.close()

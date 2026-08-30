@@ -5,7 +5,7 @@ Streamlit 主程式：
 1. 專業義消承辦人情境導引 (支援線上動態修改)
 2. 5大業務分類分頁與全域搜尋
 3. 最新異動紅字醒目提示
-4. 我有話要說雙向回饋與回覆看板
+4. 我有話要說雙向回饋與回覆看板 (支援單筆刪除、一鍵清空)
 5. 科內承辦人維護模式 (Excel批次編輯、單筆維護、導引維護、留言管理)
 """
 
@@ -507,7 +507,6 @@ with tabs[0]:
         linked_titles = [t.strip() for t in (g.get("linked_task_titles") or "").splitlines() if t.strip()]
         matched_any = False
         for l_title in linked_titles:
-            # 優先以完整比對，其次以包含比對
             matching_task = all_tasks_dict.get(l_title)
             if not matching_task:
                 for k, v in all_tasks_dict.items():
@@ -686,7 +685,7 @@ with tabs[6]:
         st.caption(f"共計 **{len(feedbacks)}** 則回饋紀錄：")
 
         if not feedbacks:
-            st.info("目前無符合條件的回饋紀錄。")
+            st.info("目前尚無任何回饋紀錄。")
         else:
             status_style_map = {
                 "待處理": ("#fef3c7", "#b45309", "🟡 待處理"),
@@ -738,12 +737,12 @@ with tabs[6]:
 if st.session_state["is_admin"]:
     with tabs[7]:
         st.markdown("### ⚙️ 科內承辦人線上快速維護介面")
-        st.info("💡 承辦人可直接在此處編輯各業務內容（自動連動首頁導航）、線上修改「專業義消承辦人」四大情境說明，或回覆「我有話要說」同仁留言。")
+        st.info("💡 承辦人可直接在此處編輯各業務內容（自動連動首頁導航）、線上修改「專業義消承辦人」四大情境說明，或管理/回覆/刪除「我有話要說」同仁留言。")
 
         subtab1, subtab2, subtab3, subtab4, subtab5, subtab6 = st.tabs([
             "📋 Excel 式線上即時編輯",
             "🎖️ 專業義消承辦人 - 導引維護",
-            "💬 我有話要說 - 線上回覆管理",
+            "💬 我有話要說 - 線上回覆與留言管理",
             "➕ 新增業務項目",
             "✏️ 單筆詳細維護 / 刪除",
             "🔄 資料庫管理與重設"
@@ -809,10 +808,8 @@ if st.session_state["is_admin"]:
 
                 edit_g_desc = st.text_area("情境引導與說明文字 (支援 Markdown)", value=cur_g["description"] or "", height=140)
                 
-                # 關聯業務多選/設定
                 st.markdown("**🔗 關聯業務卡片設定 (在前台此情境下展示的業務項目卡片)：**")
                 default_linked = [t.strip() for t in (cur_g["linked_task_titles"] or "").splitlines() if t.strip()]
-                # 篩選出存在於目前資料庫的選項
                 valid_defaults = [t for t in default_linked if t in all_task_titles]
                 
                 selected_tasks = st.multiselect(
@@ -835,20 +832,33 @@ if st.session_state["is_admin"]:
                     st.success(f"🎉 成功更新【{edit_g_title}】！前台第一大項已同步更新。")
                     st.rerun()
 
-        # 子分頁 3: 回覆我有話要說留言 (修正 db.FEEDBACK_STATUSES)
+        # 子分頁 3: 回覆我有話要說留言 & 留言管理 (支援單筆刪除與批次清空)
         with subtab3:
-            st.markdown("#### 💬 我有話要說 — 同仁留言官方回覆與狀態更新")
+            st.markdown("#### 💬 我有話要說 — 同仁留言官方回覆與留言管理")
             all_fbs = db.get_all_feedbacks()
+            
+            # 清空全部留言區塊
+            col_top_l, col_top_r = st.columns([7, 3])
+            with col_top_r:
+                with st.expander("🧹 清空所有留言 (含示範留言)"):
+                    st.warning("⚠️ 此操作將永久刪除全部留言紀錄且無法復原。")
+                    confirm_clear = st.checkbox("確認清空所有留言", key="confirm_clear_all_fbs")
+                    if st.button("🚨 立即清空全部留言", type="secondary", disabled=not confirm_clear, use_container_width=True):
+                        db.clear_all_feedbacks()
+                        st.success("✅ 已清空所有留言紀錄！")
+                        st.rerun()
+
             if not all_fbs:
-                st.info("目前無任何同仁回饋留言。")
+                st.info("目前資料庫中尚無任何同仁回饋留言。")
             else:
                 fb_options = {f"ID #{fb['id']} - [{fb['category']}] {fb['unit_name']} ({fb['submitter']}) - {fb['status']}": fb['id'] for fb in all_fbs}
-                sel_fb_label = st.selectbox("請選擇要回覆或處理的留言", list(fb_options.keys()))
+                sel_fb_label = st.selectbox("請選擇要回覆或刪除的留言", list(fb_options.keys()))
                 sel_fb_id = fb_options[sel_fb_label]
                 cur_fb = next(f for f in all_fbs if f["id"] == sel_fb_id)
 
                 st.markdown(f"""
                 <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:1rem; margin-bottom:1rem;">
+                    <strong>留言編號</strong>：ID #{cur_fb['id']}<br>
                     <strong>提報單位</strong>：{cur_fb['unit_name']} ({cur_fb['submitter']})<br>
                     <strong>業務類別</strong>：{cur_fb['category']}<br>
                     <strong>聯絡方式</strong>：{cur_fb['contact_info'] or '無'}<br>
@@ -862,22 +872,22 @@ if st.session_state["is_admin"]:
                 with st.form(f"reply_fb_form_{sel_fb_id}"):
                     curr_status_idx = db.FEEDBACK_STATUSES.index(cur_fb["status"]) if cur_fb["status"] in db.FEEDBACK_STATUSES else 0
                     reply_status = st.selectbox("處理狀態", db.FEEDBACK_STATUSES, index=curr_status_idx)
-                    reply_content = st.text_area("民力科官方回覆內容 (將公開於看板供同仁查閱)", value=cur_fb["admin_reply"] or "", height=150)
+                    reply_content = st.text_area("民力科官方回覆內容 (將公開於看板供同仁查閱)", value=cur_fb["admin_reply"] or "", height=140)
                     
-                    col_rep1, col_rep2 = st.columns([4, 6])
-                    with col_rep1:
-                        rep_btn = st.form_submit_button("📢 發布 / 更新官方回覆", type="primary", use_container_width=True)
+                    rep_btn = st.form_submit_button("📢 發布 / 更新官方回覆", type="primary", use_container_width=True)
 
                     if rep_btn:
                         db.reply_feedback(sel_fb_id, reply_status, reply_content)
                         st.success(f"✅ 已成功更新留言 ID #{sel_fb_id} 的回覆與狀態！")
                         st.rerun()
 
-                with st.expander("🗑️ 刪除此筆回饋紀錄"):
-                    del_chk = st.checkbox(f"我確認要刪除留言 ID #{sel_fb_id}", key=f"del_fb_{sel_fb_id}")
-                    if st.button("❌ 確認刪除留言", disabled=not del_chk):
+                # 單筆刪除區塊
+                st.markdown("<br>", unsafe_allow_html=True)
+                col_d1, col_d2 = st.columns([7, 3])
+                with col_d2:
+                    if st.button(f"🗑️ 永久刪除此筆留言 (ID #{sel_fb_id})", type="secondary", use_container_width=True):
                         db.delete_feedback(sel_fb_id)
-                        st.warning(f"已刪除留言 ID #{sel_fb_id}！")
+                        st.warning(f"✅ 已永久刪除留言 ID #{sel_fb_id}！")
                         st.rerun()
 
         # 子分頁 4: 新增業務項目
