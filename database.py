@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 database.py - 民力科業務知識動態看板 資料庫模組
-SQLite 資料庫操作：業務清單 (TaskDatabase) 與 我有話要說回饋留言板 (FeedbackDatabase)
+SQLite 資料庫操作：
+1. 業務主表 (TaskDatabase)
+2. 專業義消承辦人情境導引 (GuideDatabase) - 支援線上動態修改情境與關聯業務
+3. 我有話要說回饋留言板 (FeedbackDatabase)
 """
 
 import sqlite3
@@ -209,6 +212,42 @@ SAMPLE_DATA = [
     }
 ]
 
+# 專業義消承辦人 4 大實務情境預設導引資料 (可透過後台線上修改)
+SAMPLE_GUIDES = [
+    {
+        "scenario_num": 1,
+        "icon": "👥",
+        "title": "1. 我的分隊義消是誰？",
+        "target_badge": "連結業務：義消專長資料庫定期維護",
+        "description": "📌 **情境說明**：新任承辦人或需要清查轄內分隊義消弟兄姊妹編組、專長分類（救護、水域、山搜、無人機、火搶）及證照效期時，請透過義消專長資料庫進行人員名冊查閱與定期維護。",
+        "linked_task_titles": "義消專長資料庫定期維護"
+    },
+    {
+        "scenario_num": 2,
+        "icon": "🎁",
+        "title": "2. 義消問我有什麼福利？",
+        "target_badge": "連結業務：義消福利大項 (保險互助 / 出勤費 / 獎學金 / 健檢專案)",
+        "description": "📌 **情境說明**：義消隊員詢問有哪些福利保障時，承辦人可依下列四大項福利政策向同仁說明並協助申辦：\n• **團體保險與福利互助**（傷病醫療、失能住院）：透過線上管制系統申辦\n• **協勤出勤費與誤餐費**：依救災派遣系統紀錄申領\n• **義消子女獎學金**：每學期依成績申請\n• **健康檢查補助**：★ 預計 116 年推動實施，每年提供 300 位名額",
+        "linked_task_titles": "義消保險及福利互助申請\n義消出勤費申請作業\n消防義消子女獎學金申請\n義消健康檢查專案補助"
+    },
+    {
+        "scenario_num": 3,
+        "icon": "🚒",
+        "title": "3. 義消出勤協助救災",
+        "target_badge": "連結業務：義消裝備管理 及 義消出勤費申請",
+        "description": "📌 **情境說明**：義消同仁出勤協勤救災前之個人防護裝備（PPE）配發管理，以及出勤後之出勤費申報作業：\n• **裝備配發**：本年度採購案針對尚未配發之火搶義消全面配發，預計 11 月完成驗收後發放。\n• **津貼申報**：出勤紀錄由救災派遣系統匯出簽核，並檢附印領清冊辦理核發。",
+        "linked_task_titles": "本年度義消消防衣帽鞋採購與火搶義消配發\n義消出勤費申請作業"
+    },
+    {
+        "scenario_num": 4,
+        "icon": "🤝",
+        "title": "4. 義消辦理團結活動",
+        "target_badge": "連結業務：義消申請補縣府及各鄉鎮公所補捐助案件",
+        "description": "📌 **情境說明**：各義消分隊規劃辦理常年訓練研習、自強團結活動或器材購置時，向縣府及各鄉鎮公所申請補捐助款之作業指引：\n• **線上系統**：請至補捐助系統下載表單並線上登錄。\n• **申請範例（顏色區別）**：申請範例會隨時間及相關規定更新，**更新部分會以顏色做清楚區別**，請務必參照最新版本填報！",
+        "linked_task_titles": "義消申請補縣府及各鄉鎮公所補捐助案件"
+    }
+]
+
 # 「我有話要說」範例留言初始資料
 SAMPLE_FEEDBACKS = [
     {
@@ -275,7 +314,20 @@ def init_db(force_reseed=False):
         )
     """)
 
-    # 2. 我有話要說留言板 FeedbackDatabase
+    # 2. 專業義消承辦人情境導引表 GuideDatabase
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS GuideDatabase (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scenario_num INTEGER NOT NULL,
+            icon TEXT,
+            title TEXT NOT NULL,
+            target_badge TEXT,
+            description TEXT,
+            linked_task_titles TEXT
+        )
+    """)
+
+    # 3. 我有話要說留言板 FeedbackDatabase
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS FeedbackDatabase (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -294,10 +346,11 @@ def init_db(force_reseed=False):
 
     if force_reseed:
         cursor.execute("DELETE FROM TaskDatabase")
+        cursor.execute("DELETE FROM GuideDatabase")
         cursor.execute("DELETE FROM FeedbackDatabase")
         conn.commit()
 
-    # 檢查 TaskDatabase 是否有資料
+    # 檢查 TaskDatabase
     cursor.execute("SELECT COUNT(*) FROM TaskDatabase")
     if cursor.fetchone()[0] == 0:
         for item in SAMPLE_DATA:
@@ -319,7 +372,25 @@ def init_db(force_reseed=False):
             ))
         conn.commit()
 
-    # 檢查 FeedbackDatabase 是否有資料
+    # 檢查 GuideDatabase
+    cursor.execute("SELECT COUNT(*) FROM GuideDatabase")
+    if cursor.fetchone()[0] == 0:
+        for g in SAMPLE_GUIDES:
+            cursor.execute("""
+                INSERT INTO GuideDatabase (
+                    scenario_num, icon, title, target_badge, description, linked_task_titles
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                g["scenario_num"],
+                g["icon"],
+                g["title"],
+                g["target_badge"],
+                g["description"],
+                g["linked_task_titles"]
+            ))
+        conn.commit()
+
+    # 檢查 FeedbackDatabase
     cursor.execute("SELECT COUNT(*) FROM FeedbackDatabase")
     if cursor.fetchone()[0] == 0:
         for fb in SAMPLE_FEEDBACKS:
@@ -541,7 +612,6 @@ def get_summary_stats():
     cursor.execute("SELECT COUNT(*) FROM TaskDatabase WHERE update_highlight IS NOT NULL AND TRIM(update_highlight) != ''")
     highlight_count = cursor.fetchone()[0]
     
-    # 留言統計
     cursor.execute("SELECT COUNT(*) FROM FeedbackDatabase")
     feedback_total = cursor.fetchone()[0]
 
@@ -557,6 +627,44 @@ def get_summary_stats():
         "feedback_total": feedback_total,
         "feedback_replied": feedback_replied
     }
+
+
+# ==================== 專業義消承辦人 (Guide) CRUD 操作 ====================
+
+def get_all_guides():
+    """取得專業義消承辦人情境導引資料"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM GuideDatabase ORDER BY scenario_num ASC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def update_guide(guide_id, icon, title, target_badge, description, linked_task_titles):
+    """更新專業義消承辦人特定情境設定"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE GuideDatabase SET
+            icon = ?,
+            title = ?,
+            target_badge = ?,
+            description = ?,
+            linked_task_titles = ?
+        WHERE id = ?
+    """, (
+        icon.strip(),
+        title.strip(),
+        target_badge.strip(),
+        description.strip(),
+        linked_task_titles.strip(),
+        guide_id
+    ))
+    conn.commit()
+    conn.close()
 
 
 # ==================== 我有話要說 (Feedback) CRUD 操作 ====================

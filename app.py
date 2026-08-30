@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 app.py - 民力科業務知識動態看板
-Streamlit 主程式：專業義消承辦人情境導引、5大業務分類分頁、我有話要說回饋專區、Excel式在線編輯
+Streamlit 主程式：
+1. 專業義消承辦人情境導引 (支援線上動態修改)
+2. 5大業務分類分頁與全域搜尋
+3. 最新異動紅字醒目提示
+4. 我有話要說雙向回饋與回覆看板
+5. 科內承辦人維護模式 (Excel批次編輯、單筆維護、導引維護、留言管理)
 """
 
 import streamlit as st
@@ -51,7 +56,7 @@ st.markdown("""
         border: 1px solid #e0e7ff;
         border-radius: 12px;
         padding: 1.4rem 1.6rem;
-        margin-bottom: 1.4rem;
+        margin-bottom: 1.2rem;
         box-shadow: 0 4px 12px rgba(30, 58, 138, 0.06);
         border-left: 6px solid #2563eb;
         transition: transform 0.15s ease, box-shadow 0.15s ease;
@@ -464,115 +469,59 @@ if st.session_state["is_admin"]:
 tabs = st.tabs(tab_names)
 
 
-# === 1. 專業義消承辦人 Tab ===
+# === 1. 專業義消承辦人 Tab (動態載入與展示) ===
 with tabs[0]:
     st.markdown("""
     <div style="background: linear-gradient(to right, #eff6ff, #f8fafc); border: 1px solid #bfdbfe; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.5rem;">
         <h3 style="color: #1e3a8a; margin-top: 0; margin-bottom: 0.4rem;">🎖️ 專業義消承辦人 — 四大實務情境作業導航</h3>
         <p style="color: #475569; font-size: 0.95rem; margin-bottom: 0;">
-            專為分隊與科內義消承辦人量身打造之實務情境導引，依序整合第一線最常處理的「人員名冊、福利諮詢、救災協勤、活動補助」核心資源與作業系統。
+            專為分隊與科內義消承辦人量身打造之實務情境導引，依序整合第一線最常處理的「人員名冊、福利諮詢、救災協勤、活動補助」核心資源與作業系統。（內容可於維護模式線上調整）
         </p>
     </div>
     """, unsafe_allow_html=True)
 
-    all_tasks_dict = {t["title"]: t for t in db.get_tasks_by_filter()}
+    all_tasks = db.get_tasks_by_filter()
+    all_tasks_dict = {t["title"]: t for t in all_tasks}
+    guides = db.get_all_guides()
 
-    # 情境 1: 我的分隊義消是誰
-    st.markdown("""
-    <div class="guide-card">
-        <div class="guide-card-header">
-            <span class="guide-icon">👥</span>
-            <div>
-                <span class="guide-title">1. 我的分隊義消是誰？</span>
-                <span class="guide-target-badge">連結業務：義消專長資料庫定期維護</span>
+    for g in guides:
+        badge_html = f"<span class='guide-target-badge'>{g['target_badge']}</span>" if g.get('target_badge') else ""
+        icon = g.get('icon') or "📌"
+
+        st.markdown(f"""
+        <div class="guide-card">
+            <div class="guide-card-header">
+                <span class="guide-icon">{icon}</span>
+                <div>
+                    <span class="guide-title">{g['title']}</span>
+                    {badge_html}
+                </div>
+            </div>
+            <div style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
+                {g['description']}
             </div>
         </div>
-        <p style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
-            📌 <strong>情境說明</strong>：新任承辦人或需要清查轄內分隊義消弟兄姊妹編組、專長分類（救護、水域、山搜、無人機、火搶）及證照效期時，請透過義消專長資料庫進行人員名冊查閱與定期維護。
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
-    task_1 = all_tasks_dict.get("義消專長資料庫定期維護")
-    if task_1:
-        render_task_card(task_1)
+        # 找出關聯任務卡片
+        linked_titles = [t.strip() for t in (g.get("linked_task_titles") or "").splitlines() if t.strip()]
+        matched_any = False
+        for l_title in linked_titles:
+            # 優先以完整比對，其次以包含比對
+            matching_task = all_tasks_dict.get(l_title)
+            if not matching_task:
+                for k, v in all_tasks_dict.items():
+                    if l_title in k or k in l_title:
+                        matching_task = v
+                        break
+            if matching_task:
+                render_task_card(matching_task)
+                matched_any = True
+        
+        if not matched_any and linked_titles:
+            st.caption(f"💡 本情境關聯業務：{', '.join(linked_titles)} (尚未建立對應卡片)")
 
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # 情境 2: 義消問我有什麼福利
-    st.markdown("""
-    <div class="guide-card">
-        <div class="guide-card-header">
-            <span class="guide-icon">🎁</span>
-            <div>
-                <span class="guide-title">2. 義消問我有什麼福利？</span>
-                <span class="guide-target-badge">連結業務：義消福利大項 (保險互助 / 出勤費 / 獎學金 / 健檢專案)</span>
-            </div>
-        </div>
-        <p style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
-            📌 <strong>情境說明</strong>：義消隊員詢問有哪些福利保障時，承辦人可依下列四大項福利政策向同仁說明並協助申辦：
-            <br>• <strong>團體保險與福利互助</strong>（傷病醫療、失能住院）：透過線上管制系統申辦
-            <br>• <strong>協勤出勤費與誤餐費</strong>：依救災派遣系統紀錄申領
-            <br>• <strong>義消子女獎學金</strong>：每學期依成績申請
-            <br>• <strong>健康檢查補助</strong>：★ 預計 116 年推動實施，每年提供 300 位名額
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    welfare_tasks = db.get_tasks_by_filter(category="義消福利")
-    for wt in welfare_tasks:
-        render_task_card(wt)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # 情境 3: 義消出勤協助救災
-    st.markdown("""
-    <div class="guide-card">
-        <div class="guide-card-header">
-            <span class="guide-icon">🚒</span>
-            <div>
-                <span class="guide-title">3. 義消出勤協助救災</span>
-                <span class="guide-target-badge">連結業務：義消裝備管理 及 義消出勤費申請</span>
-            </div>
-        </div>
-        <p style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
-            📌 <strong>情境說明</strong>：義消同仁出勤協勤救災前之個人防護裝備（PPE）配發管理，以及出勤後之出勤費申報作業：
-            <br>• <strong>裝備配發</strong>：本年度採購案針對尚未配發之火搶義消全面配發，預計 11 月完成驗收後發放。
-            <br>• <strong>津貼申報</strong>：出勤紀錄由救災派遣系統匯出簽核，並檢附印領清冊辦理核發。
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    equip_task = all_tasks_dict.get("本年度義消消防衣帽鞋採購與火搶義消配發")
-    if equip_task:
-        render_task_card(equip_task)
-    allowance_task = all_tasks_dict.get("義消出勤費申請作業")
-    if allowance_task:
-        render_task_card(allowance_task)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # 情境 4: 義消辦理團結活動
-    st.markdown("""
-    <div class="guide-card">
-        <div class="guide-card-header">
-            <span class="guide-icon">🤝</span>
-            <div>
-                <span class="guide-title">4. 義消辦理團結活動</span>
-                <span class="guide-target-badge">連結業務：義消申請補縣府及各鄉鎮公所補捐助案件</span>
-            </div>
-        </div>
-        <p style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
-            📌 <strong>情境說明</strong>：各義消分隊規劃辦理常年訓練研習、自強團結活動或器材購置時，向縣府及各鄉鎮公所申請補捐助款之作業指引：
-            <br>• <strong>線上系統</strong>：請至補捐助系統下載表單並線上登錄。
-            <br>• <strong>申請範例（顏色區別）</strong>：申請範例會隨時間及相關規定更新，<span style="color:#dc2626;font-weight:700;">更新部分會以顏色做清楚區別</span>，請務必參照最新版本填報！
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    grant_task = all_tasks_dict.get("義消申請補縣府及各鄉鎮公所補捐助案件")
-    if grant_task:
-        render_task_card(grant_task)
+        st.markdown("<br>", unsafe_allow_html=True)
 
 
 # === 2. 義消業務 Tab ===
@@ -789,10 +738,11 @@ with tabs[6]:
 if st.session_state["is_admin"]:
     with tabs[7]:
         st.markdown("### ⚙️ 科內承辦人線上快速維護介面")
-        st.info("💡 承辦人可直接在此處使用類似 Excel 的表格在線編輯、新增業務，或回覆「我有話要說」同仁留言。")
+        st.info("💡 承辦人可直接在此處編輯各業務內容（自動連動首頁導航）、線上修改「專業義消承辦人」四大情境說明，或回覆「我有話要說」同仁留言。")
 
-        subtab1, subtab2, subtab3, subtab4, subtab5 = st.tabs([
+        subtab1, subtab2, subtab3, subtab4, subtab5, subtab6 = st.tabs([
             "📋 Excel 式線上即時編輯",
+            "🎖️ 專業義消承辦人 - 導引維護",
             "💬 我有話要說 - 線上回覆管理",
             "➕ 新增業務項目",
             "✏️ 單筆詳細維護 / 刪除",
@@ -802,7 +752,7 @@ if st.session_state["is_admin"]:
         # 子分頁 1: st.data_editor 批次編輯
         with subtab1:
             st.markdown("#### 📋 批次表格編輯器 (`st.data_editor`)")
-            st.caption("可雙擊任一儲存格修改文字、承辦人、狀態或最新異動重點，修改完成後請點擊下方「💾 儲存所有表格修改」按鈕寫入資料庫。")
+            st.caption("可雙擊任一儲存格修改文字、承辦人、狀態或最新異動重點，修改完成後請點擊下方「💾 儲存所有表格修改」按鈕寫入資料庫。（※ 於此修改的業務內容會自動同步連動首頁「專業義消承辦人」中的對應卡片！）")
             
             df_current = db.get_all_tasks_df()
             
@@ -835,8 +785,58 @@ if st.session_state["is_admin"]:
                     st.success(f"✅ 成功儲存！已同步更新 {updated_cnt} 筆變更資料至 SQLite 資料庫。")
                     st.rerun()
 
-        # 子分頁 2: 回覆我有話要說留言
+        # 子分頁 2: 專業義消承辦人情境導引維護
         with subtab2:
+            st.markdown("#### 🎖️ 「專業義消承辦人」四大情境說明與關聯業務維護")
+            st.caption("您可以在此自由修改第一大項各情境的標題、圖示、指引文字，以及要附加顯示哪幾項業務卡片！")
+            
+            guides_list = db.get_all_guides()
+            all_task_titles = [t["title"] for t in db.get_all_tasks_df().to_dict("records")]
+            
+            g_options = {f"情境 {g['scenario_num']}：{g['title']}": g['id'] for g in guides_list}
+            sel_g_label = st.selectbox("請選擇要編輯的情境導航", list(g_options.keys()))
+            sel_g_id = g_options[sel_g_label]
+            cur_g = next(g for g in guides_list if g["id"] == sel_g_id)
+
+            with st.form(f"edit_guide_form_{sel_g_id}"):
+                col_g1, col_g2, col_g3 = st.columns([1, 4, 3])
+                with col_g1:
+                    edit_g_icon = st.text_input("圖示 (Emoji)", value=cur_g["icon"] or "📌")
+                with col_g2:
+                    edit_g_title = st.text_input("情境大標題 *", value=cur_g["title"] or "")
+                with col_g3:
+                    edit_g_badge = st.text_input("右上標籤文字", value=cur_g["target_badge"] or "")
+
+                edit_g_desc = st.text_area("情境引導與說明文字 (支援 Markdown)", value=cur_g["description"] or "", height=140)
+                
+                # 關聯業務多選/設定
+                st.markdown("**🔗 關聯業務卡片設定 (在前台此情境下展示的業務項目卡片)：**")
+                default_linked = [t.strip() for t in (cur_g["linked_task_titles"] or "").splitlines() if t.strip()]
+                # 篩選出存在於目前資料庫的選項
+                valid_defaults = [t for t in default_linked if t in all_task_titles]
+                
+                selected_tasks = st.multiselect(
+                    "選擇要在此情境下展開展示的業務項目",
+                    options=all_task_titles,
+                    default=valid_defaults,
+                    help="可複選多個業務，前台會自動將這些業務的最新 SOP、連結與異動重點卡片完整呈現於該情境中！"
+                )
+
+                submit_guide = st.form_submit_button("💾 儲存此情境導引設定", type="primary", use_container_width=True)
+                if submit_guide:
+                    db.update_guide(
+                        sel_g_id,
+                        edit_g_icon,
+                        edit_g_title,
+                        edit_g_badge,
+                        edit_g_desc,
+                        "\n".join(selected_tasks)
+                    )
+                    st.success(f"🎉 成功更新【{edit_g_title}】！前台第一大項已同步更新。")
+                    st.rerun()
+
+        # 子分頁 3: 回覆我有話要說留言 (修正 db.FEEDBACK_STATUSES)
+        with subtab3:
             st.markdown("#### 💬 我有話要說 — 同仁留言官方回覆與狀態更新")
             all_fbs = db.get_all_feedbacks()
             if not all_fbs:
@@ -859,8 +859,9 @@ if st.session_state["is_admin"]:
                 </div>
                 """, unsafe_allow_html=True)
 
-                with st.form("reply_fb_form"):
-                    reply_status = st.selectbox("處理狀態", db.FEEDBACK_STATUSES, index=db.FEEDBACK_STATUSES.index(cur_fb["status"]) if cur_fb["status"] in db.FEEDBACKSTATUSES else 0)
+                with st.form(f"reply_fb_form_{sel_fb_id}"):
+                    curr_status_idx = db.FEEDBACK_STATUSES.index(cur_fb["status"]) if cur_fb["status"] in db.FEEDBACK_STATUSES else 0
+                    reply_status = st.selectbox("處理狀態", db.FEEDBACK_STATUSES, index=curr_status_idx)
                     reply_content = st.text_area("民力科官方回覆內容 (將公開於看板供同仁查閱)", value=cur_fb["admin_reply"] or "", height=150)
                     
                     col_rep1, col_rep2 = st.columns([4, 6])
@@ -879,8 +880,8 @@ if st.session_state["is_admin"]:
                         st.warning(f"已刪除留言 ID #{sel_fb_id}！")
                         st.rerun()
 
-        # 子分頁 3: 新增業務項目
-        with subtab3:
+        # 子分頁 4: 新增業務項目
+        with subtab4:
             st.markdown("#### ➕ 新增業務項目表單")
             with st.form("add_task_form", clear_on_submit=True):
                 col_a, col_b, col_c = st.columns([2, 2, 2])
@@ -933,8 +934,8 @@ if st.session_state["is_admin"]:
                         st.success(f"🎉 成功新增業務項目！編號：ID #{new_id}【{new_title}】")
                         st.rerun()
 
-        # 子分頁 4: 單筆詳細編輯與刪除
-        with subtab4:
+        # 子分頁 5: 單筆詳細編輯與刪除
+        with subtab5:
             st.markdown("#### ✏️ 單筆業務詳細編輯與刪除")
             df_edit = db.get_all_tasks_df()
             if df_edit.empty:
@@ -946,7 +947,7 @@ if st.session_state["is_admin"]:
                 
                 current_item = df_edit[df_edit["id"] == selected_id].iloc[0]
 
-                with st.form("edit_single_form"):
+                with st.form(f"edit_single_form_{selected_id}"):
                     col_e1, col_e2, col_e3 = st.columns([2, 2, 2])
                     with col_e1:
                         edit_category = st.selectbox("業務分類", db.CATEGORIES, index=db.CATEGORIES.index(current_item["category"]) if current_item["category"] in db.CATEGORIES else 0)
@@ -993,10 +994,10 @@ if st.session_state["is_admin"]:
                         st.warning(f"已刪除 ID #{selected_id}！")
                         st.rerun()
 
-        # 子分頁 5: 資料庫重設
-        with subtab5:
+        # 子分頁 6: 資料庫重設
+        with subtab6:
             st.markdown("#### 🔄 資料庫管理與重設")
-            st.warning("⚠️ 重設資料庫將會清除目前的手動修改，並重新匯入科內指定的 12 筆官方標準業務資料與範例留言。")
+            st.warning("⚠️ 重設資料庫將會清除目前的手動修改，並重新匯入科內指定的 12 筆官方標準業務資料、導引設定與範例留言。")
             confirm_reseed = st.checkbox("我了解這會覆蓋目前的自訂資料並重設為官方清單資料")
             if st.button("🔄 重新初始化資料庫 (重設為科內官方業務清單)", disabled=not confirm_reseed, type="primary"):
                 db.init_db(force_reseed=True)
