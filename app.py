@@ -6,7 +6,7 @@ Streamlit 主程式：
 2. 5大業務分類分頁與全域搜尋
 3. 最新異動紅字醒目提示
 4. 我有話要說雙向回饋與回覆看板 (以臺東縣消防局四大外勤大隊與各分隊為選填範例)
-5. 科內承辦人維護模式 (Excel批次編輯、單筆維護、導引維護、留言管理)
+5. 科內承辦人維護模式 (Excel批次編輯、單筆維護、導引維護、留言管理，具備持久儲存成功提示與Toast通知)
 """
 
 import streamlit as st
@@ -25,6 +25,34 @@ st.set_page_config(
 
 # 初始化資料庫
 db.init_db()
+
+# 初始化 Session State 與持久通知函式
+if "is_admin" not in st.session_state:
+    st.session_state["is_admin"] = False
+if "flash_message" not in st.session_state:
+    st.session_state["flash_message"] = None
+
+def set_flash_message(text, msg_type="success", icon="💾"):
+    """設定跨頁持久通知訊息並觸發右下角 Toast 提示"""
+    st.session_state["flash_message"] = {"text": text, "type": msg_type}
+    try:
+        st.toast(text, icon=icon)
+    except Exception:
+        pass
+
+def show_flash_message():
+    """顯示並清除目前的通知訊息"""
+    if st.session_state.get("flash_message"):
+        msg = st.session_state["flash_message"]
+        if msg["type"] == "success":
+            st.success(msg["text"])
+        elif msg["type"] == "warning":
+            st.warning(msg["text"])
+        elif msg["type"] == "error":
+            st.error(msg["text"])
+        else:
+            st.info(msg["text"])
+        st.session_state["flash_message"] = None
 
 # 自訂樣式 (CSS)
 st.markdown("""
@@ -89,16 +117,6 @@ st.markdown("""
         color: #1e293b;
         font-size: 0.96rem;
         line-height: 1.6;
-        margin-bottom: 1.2rem;
-    }
-    .guide-sop-box {
-        background: #ffffff;
-        border: 1px solid #e0e7ff;
-        border-radius: 8px;
-        padding: 1.1rem 1.4rem;
-        color: #334155;
-        font-size: 0.95rem;
-        line-height: 1.65;
         margin-bottom: 0.8rem;
     }
 
@@ -258,7 +276,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 系統頂部橫幅 (標註臺東縣消防局民力訓練科)
+# 系統頂部橫幅
 st.markdown("""
 <div class="main-header">
     <div style="display: flex; align-items: center; justify-content: space-between;">
@@ -274,9 +292,8 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# 初始化 Session State
-if "is_admin" not in st.session_state:
-    st.session_state["is_admin"] = False
+# 顯示任何跨頁通知提示 (確保儲存後 100% 能看見成功訊息)
+show_flash_message()
 
 # 側邊欄設計
 with st.sidebar:
@@ -306,7 +323,7 @@ with st.sidebar:
         if st.button("🔓 啟用線上維護模式", use_container_width=True):
             if admin_pass in ["119", "admin119", "minli119"]:
                 st.session_state["is_admin"] = True
-                st.success("✅ 已切換至科內維護模式！")
+                set_flash_message("✅ 已切換至科內維護模式！所有表格與設定均可即時線上編輯。", icon="🔓")
                 st.rerun()
             else:
                 st.error("❌ 密碼錯誤，請洽民力訓練科系統管理員。")
@@ -314,7 +331,7 @@ with st.sidebar:
         st.success("🟢 已啟用維護權限（可即時編輯與回覆留言）")
         if st.button("🔒 鎖定 / 退出維護模式", use_container_width=True):
             st.session_state["is_admin"] = False
-            st.info("已退出維護模式。")
+            set_flash_message("🔒 已退出維護模式。", msg_type="info", icon="🔒")
             st.rerun()
 
     st.markdown("---")
@@ -688,7 +705,7 @@ with tabs[6]:
                     st.error("請務必填寫「所屬單位/分隊」及「反映內容」！")
                 else:
                     new_fb_id = db.add_feedback(fb_unit, fb_submitter, fb_category, fb_content, fb_contact)
-                    st.success(f"🎉 成功送出！留言編號 #{new_fb_id}，民力訓練科承辦人員將盡速為您處理查覆。")
+                    set_flash_message(f"🎉 成功送出意見！留言編號 #{new_fb_id}【{fb_unit}】，民力訓練科將盡速查明查覆。", icon="💌")
                     st.rerun()
 
     # 右側：問題與民力訓練科回覆列表
@@ -757,7 +774,7 @@ with tabs[6]:
 if st.session_state["is_admin"]:
     with tabs[7]:
         st.markdown("### ⚙️ 科內承辦人線上快速維護介面")
-        st.info("💡 承辦人可直接在此處編輯各業務內容（自動連動首頁導航）、線上修改「專業義消承辦人」四大情境說明，或管理/回覆/刪除「我有話要說」同仁留言。")
+        st.info("💡 承辦人可直接在此處編輯各業務內容（自動連動首頁導航）、線上修改「專業義消承辦人」四大情境說明，或管理/回覆/刪除「我有話要說」同仁留言。所有儲存操作均具備明確完成提示。")
 
         subtab1, subtab2, subtab3, subtab4, subtab5, subtab6 = st.tabs([
             "📋 Excel 式線上即時編輯",
@@ -801,7 +818,7 @@ if st.session_state["is_admin"]:
             with col_btn1:
                 if st.button("💾 儲存所有表格修改", type="primary", use_container_width=True):
                     updated_cnt = db.batch_update_tasks_from_df(edited_df)
-                    st.success(f"✅ 成功儲存！已同步更新 {updated_cnt} 筆變更資料至 SQLite 資料庫。")
+                    set_flash_message(f"🎉 成功儲存！已同步寫入 {updated_cnt} 筆變更資料至 SQLite 資料庫，前台看板與各分頁已即時更新。", icon="💾")
                     st.rerun()
 
         # 子分頁 2: 專業義消承辦人情境導引維護
@@ -849,7 +866,7 @@ if st.session_state["is_admin"]:
                         edit_g_desc,
                         "\n".join(selected_tasks)
                     )
-                    st.success(f"🎉 成功更新【{edit_g_title}】！前台第一大項已同步更新。")
+                    set_flash_message(f"🎉 成功儲存！已更新情境【{edit_g_title}】，首頁「專業義消承辦人」已同步更新完成。", icon="🎖️")
                     st.rerun()
 
         # 子分頁 3: 回覆我有話要說留言 & 留言管理 (支援單筆刪除與批次清空)
@@ -857,7 +874,6 @@ if st.session_state["is_admin"]:
             st.markdown("#### 💬 我有話要說 — 同仁留言官方回覆與留言管理")
             all_fbs = db.get_all_feedbacks()
             
-            # 清空全部留言區塊
             col_top_l, col_top_r = st.columns([7, 3])
             with col_top_r:
                 with st.expander("🧹 清空所有留言 (含示範留言)"):
@@ -865,7 +881,7 @@ if st.session_state["is_admin"]:
                     confirm_clear = st.checkbox("確認清空所有留言", key="confirm_clear_all_fbs")
                     if st.button("🚨 立即清空全部留言", type="secondary", disabled=not confirm_clear, use_container_width=True):
                         db.clear_all_feedbacks()
-                        st.success("✅ 已清空所有留言紀錄！")
+                        set_flash_message("✅ 已清空所有留言紀錄！資料庫已還原至乾淨狀態。", icon="🧹")
                         st.rerun()
 
             if not all_fbs:
@@ -898,7 +914,7 @@ if st.session_state["is_admin"]:
 
                     if rep_btn:
                         db.reply_feedback(sel_fb_id, reply_status, reply_content)
-                        st.success(f"✅ 已成功更新留言 ID #{sel_fb_id} 的回覆與狀態！")
+                        set_flash_message(f"🎉 成功發布回覆！已更新留言 ID #{sel_fb_id}【{cur_fb['unit_name']}】為「{reply_status}」，前台看板已即時公開。", icon="📢")
                         st.rerun()
 
                 # 單筆刪除區塊
@@ -907,7 +923,7 @@ if st.session_state["is_admin"]:
                 with col_d2:
                     if st.button(f"🗑️ 永久刪除此筆留言 (ID #{sel_fb_id})", type="secondary", use_container_width=True):
                         db.delete_feedback(sel_fb_id)
-                        st.warning(f"✅ 已永久刪除留言 ID #{sel_fb_id}！")
+                        set_flash_message(f"✅ 已永久刪除留言 ID #{sel_fb_id}【{cur_fb['unit_name']}】！", icon="🗑️")
                         st.rerun()
 
         # 子分頁 4: 新增業務項目
@@ -961,7 +977,7 @@ if st.session_state["is_admin"]:
                             new_content.strip(),
                             new_doc_links.strip()
                         )
-                        st.success(f"🎉 成功新增業務項目！編號：ID #{new_id}【{new_title}】")
+                        set_flash_message(f"🎉 成功新增業務項目！編號：ID #{new_id}【{new_title}】已寫入資料庫並於前台發布。", icon="🎉")
                         st.rerun()
 
         # 子分頁 5: 單筆詳細編輯與刪除
@@ -996,11 +1012,7 @@ if st.session_state["is_admin"]:
                     edit_content = st.text_area("詳細工作內容 / SOP (Markdown)", value=current_item["content_detail"] or "", height=250)
                     edit_doc_links = st.text_area("相關表單與雲端連結 (每行一筆)", value=current_item["doc_links"] or "", height=100)
 
-                    col_save, col_del = st.columns([5, 5])
-                    with col_save:
-                        save_btn = st.form_submit_button("💾 儲存此項目更新", type="primary", use_container_width=True)
-                    with col_del:
-                        st.caption("如需刪除請至下方確認按鈕")
+                    save_btn = st.form_submit_button("💾 儲存此項目更新", type="primary", use_container_width=True)
 
                     if save_btn:
                         db.update_single_task(
@@ -1014,14 +1026,14 @@ if st.session_state["is_admin"]:
                             edit_content.strip(),
                             edit_doc_links.strip()
                         )
-                        st.success(f"✅ 已更新 ID #{selected_id}【{edit_title}】！")
+                        set_flash_message(f"🎉 成功儲存！已更新 ID #{selected_id}【{edit_title}】最新內容，各分頁與首頁導航已即時同步更新。", icon="💾")
                         st.rerun()
 
                 with st.expander("🗑️ 危險區域：刪除此業務項目"):
                     confirm_del = st.checkbox(f"我確認要永久刪除 ID #{selected_id}【{current_item['title']}】", key=f"del_chk_{selected_id}")
                     if st.button("❌ 確認永久刪除", type="secondary", disabled=not confirm_del):
                         db.delete_task(selected_id)
-                        st.warning(f"已刪除 ID #{selected_id}！")
+                        set_flash_message(f"✅ 已永久刪除 ID #{selected_id}【{current_item['title']}】！", msg_type="warning", icon="🗑️")
                         st.rerun()
 
         # 子分頁 6: 資料庫重設
@@ -1031,5 +1043,5 @@ if st.session_state["is_admin"]:
             confirm_reseed = st.checkbox("我了解這會覆蓋目前的自訂資料並重設為官方清單資料")
             if st.button("🔄 重新初始化資料庫 (重設為科內官方業務清單)", disabled=not confirm_reseed, type="primary"):
                 db.init_db(force_reseed=True)
-                st.success("✅ 資料庫已成功重設為臺東縣消防局官方業務清單！")
+                set_flash_message("🎉 資料庫已成功重設為臺東縣消防局官方標準業務清單與預設資料！", icon="🔄")
                 st.rerun()
