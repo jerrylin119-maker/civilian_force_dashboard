@@ -479,13 +479,13 @@ if st.session_state["is_admin"]:
 tabs = st.tabs(tab_names)
 
 
-# === 1. 專業義消承辦人 Tab (★ 僅顯示情境說明與 SOP 兩項資料) ===
+# === 1. 專業義消承辦人 Tab (★ 情境說明 + 下拉收合 SOP/系統連結，版面超乾淨) ===
 with tabs[0]:
     st.markdown("""
     <div style="background: linear-gradient(to right, #eff6ff, #f8fafc); border: 1px solid #bfdbfe; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.5rem;">
         <h3 style="color: #1e3a8a; margin-top: 0; margin-bottom: 0.4rem;">🎖️ 專業義消承辦人 — 四大實務情境作業導航</h3>
         <p style="color: #475569; font-size: 0.95rem; margin-bottom: 0;">
-            專為臺東縣各外勤大隊、分隊義消承辦人量身打造之實務情境導引，僅呈現「情境說明」與「SOP 作業要點及系統連結」，直覺易讀、無多餘雜訊。
+            專為臺東縣各外勤大隊、分隊義消承辦人量身打造之實務情境導引，依序呈現四大情境說明，點擊下拉選單即可展開完整 SOP 作業指引與系統連結。
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -498,6 +498,7 @@ with tabs[0]:
         badge_html = f"<span class='guide-clean-badge'>{g['target_badge']}</span>" if g.get('target_badge') else ""
         icon = g.get('icon') or "📌"
 
+        # 頂部情境說明卡片
         st.markdown(f"""
         <div class="guide-clean-container">
             <div class="guide-clean-header">
@@ -509,8 +510,10 @@ with tabs[0]:
                 <strong>📌 情境說明</strong>：<br>
                 {g['description']}
             </div>
+        </div>
         """, unsafe_allow_html=True)
 
+        # 關聯業務 SOP 下拉展開選單 (點擊展開，保持版面清爽乾淨)
         linked_titles = [t.strip() for t in (g.get("linked_task_titles") or "").splitlines() if t.strip()]
         matched_tasks = []
         for l_title in linked_titles:
@@ -525,28 +528,19 @@ with tabs[0]:
 
         if matched_tasks:
             for mt in matched_tasks:
-                st.markdown(f"""
-                <div class="guide-sop-box">
-                    <div style="font-size: 1.05rem; font-weight: 700; color: #1e3a8a; margin-bottom: 0.6rem;">
-                        📋 【{mt['title']}】SOP 作業規範與指引
-                    </div>
-                """, unsafe_allow_html=True)
+                with st.expander(f"📋 查看【{mt['title']}】SOP 作業規範與相關系統連結", expanded=False):
+                    if mt.get("content_detail") and mt["content_detail"].strip():
+                        st.markdown(mt["content_detail"])
+                    else:
+                        st.info("暫無詳細 SOP 內容。")
 
-                if mt.get("content_detail") and mt["content_detail"].strip():
-                    st.markdown(mt["content_detail"])
-                else:
-                    st.info("暫無 SOP 內容說明。")
-
-                if mt.get("doc_links") and mt["doc_links"].strip():
-                    st.markdown("<div style='margin-top:0.6rem;'>", unsafe_allow_html=True)
-                    render_doc_links(mt["doc_links"])
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-                st.markdown("</div>", unsafe_allow_html=True)
+                    if mt.get("doc_links") and mt["doc_links"].strip():
+                        st.markdown("---")
+                        render_doc_links(mt["doc_links"])
         else:
-            st.info("暫無對應之 SOP 資料。")
+            st.info("暫無關聯之 SOP 資料。")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
 
 # === 2. 義消業務 Tab ===
