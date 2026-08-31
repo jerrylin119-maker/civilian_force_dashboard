@@ -548,7 +548,7 @@ with col_kpi4:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ==================== 📢 最新業務異動與宣導重點 (Top 3 即時快訊專區) ====================
-top_highlights = db.get_top_latest_highlights(limit=3)
+top_highlights = get_top_latest_highlights_safe(limit=3)
 
 if top_highlights:
     st.markdown("""

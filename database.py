@@ -1168,7 +1168,7 @@ def import_full_system_from_json(json_obj):
     return True, f"已成功還原：{t_count} 筆業務、{g_count} 筆情境導航、{f_count} 筆同仁留言紀錄！"
 
 def get_top_latest_highlights(limit=3):
-    """取得最新更新且具異動重點的前 N 項業務公告"""
+    """取得最新更新且具異動重點的前 N 項業務公告 (採用 Python 毫秒精準時間解析與排序)"""
     init_db()
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1176,9 +1176,26 @@ def get_top_latest_highlights(limit=3):
         SELECT id, category, subcategory, title, owner, status, update_highlight, last_updated
         FROM TaskDatabase
         WHERE update_highlight IS NOT NULL AND TRIM(update_highlight) != ''
-        ORDER BY last_updated DESC, id DESC
-        LIMIT ?
-    """, (limit,))
+    """)
     rows = cursor.fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    
+    tasks = [dict(row) for row in rows]
+    
+    def parse_task_dt(date_val):
+        if not date_val:
+            return datetime.min
+        try:
+            # Handle slash, dash, and different string formats
+            s = str(date_val).replace("/", "-").strip()
+            return pd.to_datetime(s)
+        except Exception:
+            return datetime.min
+
+    # 依真實日期時間由新到舊 (DESC)，時間相同時依 ID 由大到小 (DESC)
+    sorted_tasks = sorted(
+        tasks, 
+        key=lambda t: (parse_task_dt(t.get("last_updated")), t.get("id", 0)), 
+        reverse=True
+    )
+    return sorted_tasks[:limit]
