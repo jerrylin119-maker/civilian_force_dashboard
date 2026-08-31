@@ -1185,9 +1185,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
             
             new_doc_links = st.text_area(
                 "表單下載 / 流程圖檔 / 雲端硬碟連結 (每行一筆)",
-                placeholder="申請表單下載: https://drive.google.com/file/d/...
-作業流程圖: https://drive.google.com/file/d/...
-系統入口: https://reurl.cc/...",
+                placeholder="申請表單下載: https://drive.google.com/file/d/...\n作業流程圖: https://drive.google.com/file/d/...\n系統入口: https://reurl.cc/...",
                 height=90
             )
 
