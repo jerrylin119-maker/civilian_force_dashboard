@@ -1145,6 +1145,8 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
     # 子分頁 4: 新增業務項目
     with subtab4:
         st.markdown("#### ➕ 新增業務項目表單")
+        st.caption("承辦人可直接使用下拉選單快速指派，並支援加入 Google 雲端硬碟附件下載連結與流程圖檔。")
+        
         with st.form("add_task_form", clear_on_submit=True):
             col_a, col_b, col_c = st.columns([2, 2, 2])
             with col_a:
@@ -1152,7 +1154,13 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
             with col_b:
                 new_subcategory = st.text_input("子項目 (例：專長資料庫、保險互助、業務評核)")
             with col_c:
-                new_owner = st.text_input("科內承辦人 (例：廖昱翔科員、林威宇小隊長、陳怡忻分隊長、尤仁宏秘書)")
+                officer_opts = getattr(db, "DEFAULT_OFFICERS", ["廖昱翔科員、林威宇小隊長", "廖昱翔科員", "林威宇小隊長", "陳怡忻分隊長", "尤仁宏秘書", "民力訓練科全體同仁"]) + ["➕ 自訂其他承辦人..."]
+                sel_owner_pick = st.selectbox("科內承辦人 (下拉選擇) *", officer_opts, index=0)
+
+            col_custom_owner = st.container()
+            new_owner_custom = ""
+            if sel_owner_pick == "➕ 自訂其他承辦人...":
+                new_owner_custom = st.text_input("請輸入自訂承辦人姓名/職稱", placeholder="例：林分隊長、王科員")
 
             col_d, col_e = st.columns([4, 2])
             with col_d:
@@ -1169,17 +1177,23 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
             new_content = st.text_area(
                 "詳細工作內容、作業規範與 SOP 說明 (支援 Markdown 排版)",
                 placeholder="### 作業流程\n1. 第一步...\n2. 第二步...\n\n#### 注意事項\n* 注意要點...",
-                height=200
+                height=180
             )
 
+            st.markdown("##### 📎 業務附件、申請表單下載與流程圖檔連結")
+            st.caption("💡 **雲端永久保存指南**：將公文 PDF、申請表 Word 或 SOP 流程圖上傳至 **Google 雲端硬碟**（共用權限設為「知道連結者可檢視」），並將分享連結貼在下方：\n- 📥 **表單/公文下載**：例如 `申請表單下載: https://drive.google.com/file/d/.../view`\n- 🖼️ **流程圖/示意圖**：例如 `業務作業流程圖: https://drive.google.com/file/d/.../view`")
+            
             new_doc_links = st.text_area(
-                "相關表單、公文法規或雲端硬碟連結 (每行一筆)",
-                placeholder="申請表單下載: https://reurl.cc/...\n法規作業規定: https://law.nfa.gov.tw/...",
+                "表單下載 / 流程圖檔 / 雲端硬碟連結 (每行一筆)",
+                placeholder="申請表單下載: https://drive.google.com/file/d/...
+作業流程圖: https://drive.google.com/file/d/...
+系統入口: https://reurl.cc/...",
                 height=90
             )
 
             submitted = st.form_submit_button("🚀 確認新增並儲存至資料庫", type="primary")
             if submitted:
+                final_owner = new_owner_custom.strip() if sel_owner_pick == "➕ 自訂其他承辦人..." else sel_owner_pick
                 if not new_title.strip():
                     st.error("請輸入「業務項目名稱」！")
                 else:
@@ -1187,7 +1201,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                         new_category,
                         new_subcategory.strip(),
                         new_title.strip(),
-                        new_owner.strip(),
+                        final_owner,
                         new_status,
                         new_highlight.strip(),
                         new_content.strip(),
@@ -1241,7 +1255,16 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                     with col_e2:
                         edit_subcategory = st.text_input("子項目", value=current_item["subcategory"] or "", key=f"edit_subcat_{selected_id}")
                     with col_e3:
-                        edit_owner = st.text_input("承辦人", value=current_item["owner"] or "", key=f"edit_owner_{selected_id}")
+                        cur_own_val = current_item["owner"] or ""
+                        default_officers = getattr(db, "DEFAULT_OFFICERS", ["廖昱翔科員、林威宇小隊長", "廖昱翔科員", "林威宇小隊長", "陳怡忻分隊長", "尤仁宏秘書", "民力訓練科全體同仁"])
+                        all_officer_choices = list(dict.fromkeys(default_officers + ([cur_own_val] if cur_own_val else []) + ["➕ 自訂其他承辦人..."]))
+                        
+                        own_idx = all_officer_choices.index(cur_own_val) if cur_own_val in all_officer_choices else 0
+                        edit_owner_sel = st.selectbox("承辦人 (下拉選單) *", all_officer_choices, index=own_idx, key=f"edit_owner_sel_{selected_id}")
+
+                    custom_owner_input = ""
+                    if edit_owner_sel == "➕ 自訂其他承辦人...":
+                        custom_owner_input = st.text_input("請輸入自訂承辦人姓名/職稱", value=cur_own_val, key=f"edit_owner_cust_{selected_id}")
 
                     col_e4, col_e5 = st.columns([4, 2])
                     with col_e4:
@@ -1259,25 +1282,30 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                     edit_content = st.text_area(
                         "詳細工作內容 / SOP 作業指引 (支援 Markdown 排版)",
                         value=current_item["content_detail"] or "",
-                        height=250,
+                        height=200,
                         key=f"edit_content_{selected_id}"
                     )
+
+                    st.markdown("##### 📎 業務附件、表單下載按鈕與流程圖檔連結")
+                    st.caption("💡 **雲端永久保存指南**：將公文 PDF、申請表 Word 或 SOP 流程圖上傳至 **Google 雲端硬碟**（設為知道連結者可檢視），並將分享連結貼在下方：\n- 📥 **表單/公文下載**：例如 `申請表單下載: https://drive.google.com/file/d/.../view`\n- 🖼️ **流程圖/示意圖**：例如 `業務作業流程圖: https://drive.google.com/file/d/.../view`")
+                    
                     edit_doc_links = st.text_area(
                         "相關表單與雲端連結 (每行一筆)",
                         value=current_item["doc_links"] or "",
-                        height=100,
+                        height=90,
                         key=f"edit_links_{selected_id}"
                     )
 
                     save_btn = st.form_submit_button("💾 儲存此項目更新", type="primary", use_container_width=True)
 
                     if save_btn:
+                        final_edit_owner = custom_owner_input.strip() if edit_owner_sel == "➕ 自訂其他承辦人..." else edit_owner_sel
                         db.update_single_task(
                             selected_id,
                             edit_category,
                             edit_subcategory.strip(),
                             edit_title.strip(),
-                            edit_owner.strip(),
+                            final_edit_owner,
                             edit_status,
                             edit_highlight.strip(),
                             edit_content.strip(),
