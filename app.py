@@ -29,6 +29,14 @@ st.set_page_config(
 # 初始化資料庫
 db.init_db()
 
+# 若已綁定 Google 試算表，每次開啟/重整頁面自動即時同步最新資料！
+if "has_auto_synced" not in st.session_state:
+    try:
+        db.auto_sync_from_gsheet()
+        st.session_state["has_auto_synced"] = True
+    except Exception:
+        pass
+
 # 安全查詢封裝函式 (防止任何雲端模組快取導致的 AttributeError)
 def get_tasks_for_officer(officer_name):
     """安全取得指定承辦人負責之所有業務項目"""

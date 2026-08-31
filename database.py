@@ -1013,3 +1013,12 @@ def get_gsheet_sync_info():
     sync_time = row_time[0] if row_time else "尚未同步"
     conn.close()
     return url, sync_time
+
+def auto_sync_from_gsheet():
+    """若系統有綁定 Google 試算表，自動進行即時背景同步"""
+    url, _ = get_gsheet_sync_info()
+    if url and url.strip():
+        try:
+            sync_tasks_from_google_sheet(url)
+        except Exception:
+            pass
