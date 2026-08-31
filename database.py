@@ -1166,3 +1166,19 @@ def import_full_system_from_json(json_obj):
     conn.close()
     
     return True, f"已成功還原：{t_count} 筆業務、{g_count} 筆情境導航、{f_count} 筆同仁留言紀錄！"
+
+def get_top_latest_highlights(limit=3):
+    """取得最新更新且具異動重點的前 N 項業務公告"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, category, subcategory, title, owner, status, update_highlight, last_updated
+        FROM TaskDatabase
+        WHERE update_highlight IS NOT NULL AND TRIM(update_highlight) != ''
+        ORDER BY last_updated DESC, id DESC
+        LIMIT ?
+    """, (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]

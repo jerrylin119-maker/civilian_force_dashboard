@@ -1,15 +1,6 @@
 import json
 # -*- coding: utf-8 -*-
-"""
-app.py - 臺東縣消防局民力訓練科 業務知識動態看板
-Streamlit 主程式：
-1. 專業義消承辦人情境導引 (僅精純呈現情境說明與SOP/系統連結，不顯示多餘卡片標籤)
-2. 5大業務分類分頁與全域搜尋
-3. 承辦人點選即列出業務清單，點擊業務 1 秒切換頁面並自動定位展開 SOP！
-4. 最新異動紅字醒目提示
-5. 我有話要說雙向回饋與回覆看板 (以臺東縣消防局四大外勤大隊與各分隊為選填範例)
-6. 科內承辦人維護模式 (Excel批次編輯、單筆維護、導引維護、留言管理、CSV備份與還原)
-"""
+
 
 import streamlit as st
 import pandas as pd
@@ -555,6 +546,55 @@ with col_kpi4:
     """, unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
+
+# ==================== 📢 最新業務異動與宣導重點 (Top 3 即時快訊專區) ====================
+top_highlights = db.get_top_latest_highlights(limit=3)
+
+if top_highlights:
+    st.markdown("""
+    <div style="background: linear-gradient(to right, #fff1f2, #fff7ed); border: 1px solid #fecdd3; border-left: 6px solid #e11d48; border-radius: 10px; padding: 0.9rem 1.3rem; margin-bottom: 1.2rem; box-shadow: 0 2px 6px rgba(225, 29, 72, 0.06);">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div>
+                <span style="font-size: 1.15rem; font-weight: 700; color: #9f1239;">📢 民力訓練科 — 最新業務異動與宣導重點 (Top 3 即時快訊)</span>
+                <span style="font-size: 0.85rem; color: #be123c; margin-left: 0.6rem;">外勤大隊與分隊同仁請特別留意以下最新重要期程與規定：</span>
+            </div>
+            <span style="background: #ffe4e6; color: #9f1239; font-size: 0.78rem; font-weight: 700; padding: 2px 8px; border-radius: 9999px; border: 1px solid #fecdd3;">即時同步中</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    cols_hl = st.columns(len(top_highlights))
+    for idx, (col_h, hl_item) in enumerate(zip(cols_hl, top_highlights)):
+        with col_h:
+            target_tab_name = CATEGORY_ICON_MAP.get(hl_item["category"], (hl_item["category"], "📄"))[0]
+            cat_icon = CATEGORY_ICON_MAP.get(hl_item["category"], ("", "📄"))[1]
+            
+            st.markdown(f"""
+            <div style="background: #ffffff; border: 1px solid #fed7aa; border-radius: 8px; padding: 0.9rem 1rem; height: 100%; box-shadow: 0 2px 4px rgba(0,0,0,0.03); border-top: 4px solid #f97316;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 0.3rem;">
+                    <span style="background:#ffedd5; color:#9a3412; font-size:0.75rem; font-weight:700; padding:2px 6px; border-radius:4px;">{cat_icon} {hl_item['category']}</span>
+                    <span style="font-size:0.78rem; color:#94a3b8;">🕒 {hl_item['last_updated'][:10] if hl_item.get('last_updated') else ''}</span>
+                </div>
+                <div style="font-size: 1rem; font-weight: 700; color: #1e293b; margin: 0.4rem 0 0.3rem 0; line-height: 1.3;">
+                    {hl_item['title']}
+                </div>
+                <div style="font-size: 0.82rem; color: #64748b; margin-bottom: 0.5rem;">
+                    👤 承辦人：<strong style="color:#0f172a;">{hl_item['owner'] or '未指派'}</strong>
+                </div>
+                <div style="background: #fff5f5; border: 1px dashed #fca5a5; border-radius: 6px; padding: 0.5rem 0.7rem; font-size: 0.88rem; color: #b91c1c; font-weight: 600; line-height: 1.4; margin-bottom: 0.6rem;">
+                    {hl_item['update_highlight']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if st.button(f"🚀 點擊直達【{hl_item['title']}】", key=f"btn_hl_jump_{hl_item['id']}", use_container_width=True):
+                st.session_state["active_tab"] = target_tab_name
+                st.session_state["target_task_title"] = hl_item["title"]
+                set_flash_message(f"🚀 已為您切換至【{target_tab_name}】並展開【{hl_item['title']}】SOP！", icon="🎯")
+                st.rerun()
+                
+    st.markdown("<br>", unsafe_allow_html=True)
+
 
 
 # 輔助函式：取得狀態 Badge HTML
