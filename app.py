@@ -570,28 +570,97 @@ def get_status_badge(status):
     return f'<span class="badge-status {css_class}">{label}</span>'
 
 
-# 輔助函式：解析並渲染連結
+
+# 輔助函式：將 Google Drive 連結轉換為可直連檢視的圖片網址
+def format_gdrive_image_url(url):
+    match = re.search(r'drive\.google\.com/file/d/([a-zA-Z0-9_-]+)', url)
+    if match:
+        f_id = match.group(1)
+        return f"https://lh3.googleusercontent.com/d/{f_id}"
+    return url
+
+
+# 輔助函式：解析並渲染附件、表單與圖片 (自動判斷圖檔、文件或系統連結)
 def render_doc_links(links_text):
     if not links_text or not links_text.strip():
         return
     
-    st.markdown("**📎 相關表單 / 公文法規 / 雲端管制系統連結：**")
     lines = [line.strip() for line in links_text.splitlines() if line.strip()]
+    
+    images_list = []
+    docs_list = []
+    links_list = []
     
     for line in lines:
         if "(待補)" in line or "（待補）" in line:
-            st.markdown(f"<div class='pending-box'>📄 {line}</div>", unsafe_allow_html=True)
+            links_list.append(("pending", line, ""))
             continue
             
         urls = re.findall(r'https?://[^\s<>"\']+', line)
         if urls:
             url = urls[0]
-            label = line.replace(url, "").strip(": ")
+            label = line.replace(url, "").strip(":： -•")
             if not label:
                 label = "點擊開啟系統 / 文件連結"
-            st.markdown(f"<div class='link-box'>🔗 <a href='{url}' target='_blank' style='text-decoration:none;color:#0f766e;'><strong>{label}</strong></a> &nbsp;<span style='font-size:0.8rem;color:#64748b;'>({url})</span></div>", unsafe_allow_html=True)
+            
+            # 判斷是否為圖檔
+            is_image = any(ext in url.lower() for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"]) or                        any(k in label for k in ["圖", "流程圖", "示意圖", "照片", "架構圖", "海報", "範例圖", "截圖"])
+            
+            # 判斷是否為文件 / 表單下載
+            is_doc = any(ext in url.lower() for ext in [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".odt", ".ods", ".zip", ".rar"]) or                      any(k in label for k in ["下載", "表單", "申請表", "附件", "公文", "要點", "手冊", "範本", "清冊", "簽呈"])
+            
+            if is_image:
+                direct_img_url = format_gdrive_image_url(url)
+                images_list.append((label, direct_img_url, url))
+            elif is_doc:
+                docs_list.append((label, url))
+            else:
+                links_list.append(("link", label, url))
         else:
-            st.markdown(f"- 📄 {line}")
+            links_list.append(("text", line, ""))
+
+    # 1. 渲染文件與表單下載區
+    if docs_list:
+        st.markdown("**📥 相關附件、申請表單與法規公文下載：**")
+        for label, url in docs_list:
+            # 判斷副檔名圖示
+            icon = "📄"
+            if any(ext in url.lower() for ext in [".pdf"]): icon = "📑"
+            elif any(ext in url.lower() for ext in [".xls", ".xlsx", ".ods"]): icon = "📊"
+            elif any(ext in url.lower() for ext in [".doc", ".docx", ".odt"]): icon = "📝"
+            elif any(ext in url.lower() for ext in [".zip", ".rar"]): icon = "📦"
+            
+            st.markdown(
+                f"<div style='display:inline-block; margin:4px 6px 4px 0;'>"
+                f"<a href='{url}' target='_blank' style='text-decoration:none;'>"
+                f"<span style='background:#eff6ff; border:1px solid #bfdbfe; color:#1d4ed8; padding:6px 12px; border-radius:6px; font-weight:600; font-size:0.9rem; display:inline-flex; align-items:center;'>"
+                f"{icon} {label} &nbsp;⬇️"
+                f"</span></a></div>",
+                unsafe_allow_html=True
+            )
+        st.markdown("<br>", unsafe_allow_html=True)
+
+    # 2. 渲染系統入口與外部連結區
+    if links_list:
+        st.markdown("**🌐 相關線上管制系統 / 外部連結：**")
+        for item_type, label, url in links_list:
+            if item_type == "pending":
+                st.markdown(f"<div class='pending-box'>⏳ {label}</div>", unsafe_allow_html=True)
+            elif item_type == "link":
+                st.markdown(f"<div class='link-box'>🔗 <a href='{url}' target='_blank' style='text-decoration:none;color:#0f766e;'><strong>{label}</strong></a> &nbsp;<span style='font-size:0.8rem;color:#64748b;'>({url})</span></div>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"- 📄 {label}")
+        st.markdown("<br>", unsafe_allow_html=True)
+
+    # 3. 渲染圖檔與流程示意圖區 (直接展開顯示清晰圖片)
+    if images_list:
+        st.markdown("**🖼️ 業務流程圖 / 作業示意圖表：**")
+        for img_label, direct_url, orig_url in images_list:
+            st.caption(f"📌 {img_label}")
+            try:
+                st.image(direct_url, caption=img_label, use_container_width=True)
+            except Exception:
+                st.markdown(f"<a href='{orig_url}' target='_blank'>🔗 點擊開啟圖片：{img_label}</a>", unsafe_allow_html=True)
 
 
 # 輔助函式：渲染單張業務卡片 (支援被點擊直達時高亮與自動展開)
