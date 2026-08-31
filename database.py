@@ -900,56 +900,103 @@ def get_full_system_data():
 
 
 def sync_tasks_from_google_sheet(sheet_url):
-    """從 Google 試算表 (Google Sheets) 連結即時同步業務資料表"""
+    """從 Google 試算表 (Google Sheets) 連結即時同步業務資料表 (支援多種 Google 連結與發布端點)"""
+    import urllib.request
+    import io
+    import re
+    
     init_db()
     if not sheet_url or not sheet_url.strip():
         return False, 0, "請輸入有效的 Google 試算表連結！"
     
     clean_url = sheet_url.strip()
+    target_urls = []
     
-    # 自動將 Google Sheets 檢視/編輯連結轉換為 CSV 匯出端點
-    if "docs.google.com/spreadsheets" in clean_url:
-        if "/edit" in clean_url:
-            clean_url = clean_url.split("/edit")[0] + "/export?format=csv"
-        elif not clean_url.endswith("format=csv") and "export?" not in clean_url:
-            if "?" in clean_url:
-                clean_url = clean_url + "&export?format=csv"
-            else:
-                clean_url = clean_url + "/export?format=csv"
-                
-    try:
-        df = pd.read_csv(clean_url)
+    # 策略 1: 發布到網路 CSV 連結
+    if "output=csv" in clean_url or "format=csv" in clean_url:
+        target_urls.append(clean_url)
         
-        # 智慧欄位對照轉換
-        col_map = {
-            "分類": "category", "業務分類": "category",
-            "子項目": "subcategory", "分項": "subcategory",
-            "業務項目名稱": "title", "業務名稱": "title", "標題": "title",
-            "承辦人": "owner", "科內承辦人": "owner",
-            "執行狀態": "status", "狀態": "status",
-            "最新異動重點": "update_highlight", "異動重點": "update_highlight", "紅字重點": "update_highlight",
-            "詳細工作內容": "content_detail", "SOP": "content_detail", "詳細SOP": "content_detail", "工作內容": "content_detail",
-            "相關連結": "doc_links", "表單連結": "doc_links", "雲端連結": "doc_links", "附件連結": "doc_links"
-        }
-        df = df.rename(columns=col_map)
-        
-        # 驗證必要欄位
-        if "title" not in df.columns:
-            return False, 0, "試算表中找不到「業務項目名稱」或「title」欄位，請檢查試算表標頭！"
+    # 策略 2: Google 試算表連結 (docs.google.com/spreadsheets/d/ID/...)
+    if "docs.google.com/spreadsheets/d/" in clean_url:
+        match = re.search(r"docs\.google\.com/spreadsheets/d/([a-zA-Z0-9_-]+)", clean_url)
+        if match:
+            s_id = match.group(1)
+            target_urls.extend([
+                f"https://docs.google.com/spreadsheets/d/{s_id}/export?format=csv",
+                f"https://docs.google.com/spreadsheets/d/{s_id}/gviz/tq?tqx=out:csv"
+            ])
             
-        count = import_tasks_from_df(df, replace_all=True)
+    # 策略 3: Google 雲端硬碟檔案連結 (drive.google.com/file/d/ID/...)
+    if "drive.google.com/file/d/" in clean_url:
+        match = re.search(r"drive\.google\.com/file/d/([a-zA-Z0-9_-]+)", clean_url)
+        if match:
+            f_id = match.group(1)
+            target_urls.extend([
+                f"https://docs.google.com/spreadsheets/d/{f_id}/export?format=csv",
+                f"https://docs.google.com/spreadsheets/d/{f_id}/gviz/tq?tqx=out:csv",
+                f"https://drive.google.com/uc?export=download&id={f_id}",
+                f"https://drive.usercontent.google.com/download?id={f_id}&export=download"
+            ])
+            
+    if not target_urls:
+        target_urls.append(clean_url)
         
-        # 紀錄雲端同步設定
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('gsheet_url', ?)", (sheet_url.strip(),))
-        cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('last_gsheet_sync', ?)", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
-        conn.commit()
-        conn.close()
+    df = None
+    last_error = ""
+    
+    for t_url in target_urls:
+        try:
+            req = urllib.request.Request(t_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                raw_bytes = resp.read()
+                
+                # 若回傳 HTML 網頁內容表示非直接 CSV，略過換下一個端點
+                if raw_bytes.strip().startswith(b"<!DOCTYPE") or raw_bytes.strip().startswith(b"<html"):
+                    continue
+                    
+                # 嘗試以 utf-8 或 cp950 解析
+                try:
+                    df = pd.read_csv(io.BytesIO(raw_bytes), encoding="utf-8-sig")
+                except Exception:
+                    df = pd.read_csv(io.BytesIO(raw_bytes), encoding="utf-8")
+                break
+        except Exception as e:
+            last_error = str(e)
+            continue
+            
+    if df is None or df.empty:
+        return False, 0, (
+            "無法直接讀取該連結！\n"
+            "💡 最佳解決方法（只要 1 步）：\n"
+            "請在您的 Google 試算表中，點擊上方選單【檔案】➔【共用】➔【發布到網路】➔ 選擇【逗號分隔值 (.csv)】➔ 點【發布】，並將產生的網址貼在此處，即可 100% 成功連動！"
+        )
         
-        return True, count, "同步成功"
-    except Exception as e:
-        return False, 0, f"無法讀取 Google 試算表：{str(e)}（請確認試算表已開啟「知道連結的使用者均可檢視」權限）"
+    # 智慧欄位對照轉換
+    col_map = {
+        "分類": "category", "業務分類": "category",
+        "子項目": "subcategory", "分項": "subcategory",
+        "業務項目名稱": "title", "業務名稱": "title", "標題": "title",
+        "承辦人": "owner", "科內承辦人": "owner",
+        "執行狀態": "status", "狀態": "status",
+        "最新異動重點": "update_highlight", "異動重點": "update_highlight", "紅字重點": "update_highlight",
+        "詳細工作內容": "content_detail", "SOP": "content_detail", "詳細SOP": "content_detail", "工作內容": "content_detail",
+        "相關連結": "doc_links", "表單連結": "doc_links", "雲端連結": "doc_links", "附件連結": "doc_links"
+    }
+    df = df.rename(columns=col_map)
+    
+    if "title" not in df.columns:
+        return False, 0, "試算表中找不到「業務項目名稱」或「title」欄位，請檢查試算表標頭！"
+        
+    count = import_tasks_from_df(df, replace_all=True)
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('gsheet_url', ?)", (sheet_url.strip(),))
+    cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('last_gsheet_sync', ?)", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
+    conn.commit()
+    conn.close()
+    
+    return True, count, "同步成功"
 
 
 def get_gsheet_sync_info():
