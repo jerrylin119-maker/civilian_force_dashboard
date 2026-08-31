@@ -396,6 +396,36 @@ st.markdown("""
         color: #166534;
         font-size: 0.92rem;
     }
+
+    /* 專業 Markdown / HTML 表格樣式 */
+    table {
+        width: 100% !important;
+        border-collapse: collapse !important;
+        margin: 1rem 0 !important;
+        font-size: 0.92rem !important;
+        border-radius: 8px !important;
+        overflow: hidden !important;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.04) !important;
+    }
+    th {
+        background: #1e3a8a !important;
+        color: #ffffff !important;
+        font-weight: 700 !important;
+        text-align: left !important;
+        padding: 10px 14px !important;
+        border: 1px solid #1e3a8a !important;
+    }
+    td {
+        padding: 9px 14px !important;
+        border: 1px solid #e2e8f0 !important;
+        color: #334155 !important;
+    }
+    tr:nth-child(even) {
+        background-color: #f8fafc !important;
+    }
+    tr:hover {
+        background-color: #eff6ff !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -634,6 +664,47 @@ def get_status_badge(status):
 
 
 
+
+def format_sop_content_smart(text):
+    """智慧解析並排版 SOP 內容 (自動支援 Excel/Word 貼上的表格、Markdown 表格與圖片)"""
+    if not text or not text.strip():
+        return ""
+    
+    lines = text.splitlines()
+    new_lines = []
+    tsv_buffer = []
+    
+    for line in lines:
+        if "\t" in line:
+            parts = [p.strip() for p in line.split("\t")]
+            if len(parts) >= 2 and any(parts):
+                tsv_buffer.append(parts)
+                continue
+        if tsv_buffer:
+            max_cols = max(len(row) for row in tsv_buffer)
+            padded_rows = [row + [""] * (max_cols - len(row)) for row in tsv_buffer]
+            header = "| " + " | ".join(padded_rows[0]) + " |"
+            sep = "| " + " | ".join([":---"] * max_cols) + " |"
+            table_md = [header, sep]
+            for row in padded_rows[1:]:
+                table_md.append("| " + " | ".join(row) + " |")
+            new_lines.extend(table_md)
+            tsv_buffer = []
+        new_lines.append(line)
+        
+    if tsv_buffer:
+        max_cols = max(len(row) for row in tsv_buffer)
+        padded_rows = [row + [""] * (max_cols - len(row)) for row in tsv_buffer]
+        header = "| " + " | ".join(padded_rows[0]) + " |"
+        sep = "| " + " | ".join([":---"] * max_cols) + " |"
+        table_md = [header, sep]
+        for row in padded_rows[1:]:
+            table_md.append("| " + " | ".join(row) + " |")
+        new_lines.extend(table_md)
+        
+    return "\n".join(new_lines)
+
+
 # 輔助函式：將 Google Drive 連結轉換為可直連檢視的圖片網址
 def format_gdrive_image_url(url):
     match = re.search(r'drive\.google\.com/file/d/([a-zA-Z0-9_-]+)', url)
@@ -764,7 +835,7 @@ def render_task_card(task):
     expander_expanded = is_targeted
     with st.expander("📖 查看完整 SOP 作業規範、工作內容細節與附件連結", expanded=expander_expanded):
         if task.get("content_detail") and task["content_detail"].strip():
-            st.markdown(task["content_detail"])
+            st.markdown(format_sop_content_smart(task["content_detail"]))
         else:
             st.info("暫無詳細 SOP 內容，承辦人可於維護模式補充。")
         
@@ -856,7 +927,7 @@ if selected_tab == "🎖️ 專業義消承辦人":
             for mt in matched_tasks:
                 with st.expander(f"📋 查看【{mt['title']}】SOP 作業規範與相關系統連結", expanded=False):
                     if mt.get("content_detail") and mt["content_detail"].strip():
-                        st.markdown(mt["content_detail"])
+                        st.markdown(format_sop_content_smart(mt["content_detail"]))
                     else:
                         st.info("暫無詳細 SOP 內容。")
 
