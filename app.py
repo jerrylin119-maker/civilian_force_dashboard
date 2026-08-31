@@ -679,29 +679,23 @@ def render_task_card(task):
     subcat_html = f"<span class='badge-subcat'>📁 {task['subcategory']}</span>" if task.get('subcategory') else ""
     target_badge_html = "<span style='background:#2563eb;color:white;padding:2px 8px;border-radius:4px;font-size:0.8rem;font-weight:700;margin-left:0.5rem;'>🎯 目標業務已定位</span>" if is_targeted else ""
 
-    st.markdown(f"""
-    <div class="{card_class}">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap;">
-            <div style="margin-bottom: 0.4rem;">
-                {subcat_html}
-                <span style="font-size: 1.15rem; font-weight: 700; color: #1e293b;">{task['title']}</span>
-                {status_html}
-                {target_badge_html}
-            </div>
-            <div style="font-size: 0.88rem; color: #475569;">
-                👤 承辦人：<strong style="color:#0f172a; background:#f1f5f9; padding: 2px 6px; border-radius:4px;">{task['owner'] or '未指派'}</strong> &nbsp;|&nbsp; 
-                🕒 最後更新：{task['last_updated']}
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    owner_str = task['owner'] or '未指派'
+    updated_str = task['last_updated']
+    
+    # 採用緊湊 HTML 避免 Markdown 4空格縮排誤判為代碼區塊
+    card_html = (
+        f'<div class="{card_class}">'
+        f'<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;">'
+        f'<div style="margin-bottom:0.4rem;">{subcat_html}<span style="font-size:1.15rem;font-weight:700;color:#1e293b;">{task["title"]}</span>{status_html}{target_badge_html}</div>'
+        f'<div style="font-size:0.88rem;color:#475569;">👤 承辦人：<strong style="color:#0f172a;background:#f1f5f9;padding:2px 6px;border-radius:4px;">{owner_str}</strong> &nbsp;|&nbsp; 🕒 最後更新：{updated_str}</div>'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(card_html, unsafe_allow_html=True)
     
     if has_highlight:
-        st.markdown(f"""
-        <div class="highlight-banner">
-            {task['update_highlight']}
-        </div>
-        """, unsafe_allow_html=True)
+        highlight_html = f'<div class="highlight-banner">{task["update_highlight"]}</div>'
+        st.markdown(highlight_html, unsafe_allow_html=True)
 
     # 若為點擊直達之業務，自動展開其 SOP！
     expander_expanded = is_targeted
