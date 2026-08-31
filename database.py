@@ -1086,3 +1086,83 @@ def auto_sync_from_gsheet():
             sync_tasks_from_google_sheet(url)
         except Exception:
             pass
+
+def import_full_system_from_json(json_obj):
+    """從全系統備份包 (JSON) 一次性完全還原全系統三大資料表 (業務表、導航情境表、同仁留言表)"""
+    if not json_obj or not isinstance(json_obj, dict):
+        return False, "無效的備份檔案格式！"
+        
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    t_count = 0
+    g_count = 0
+    f_count = 0
+    
+    # 1. 還原 TaskDatabase
+    if "tasks" in json_obj and isinstance(json_obj["tasks"], list):
+        cursor.execute("DELETE FROM TaskDatabase")
+        for t in json_obj["tasks"]:
+            cursor.execute("""
+                INSERT INTO TaskDatabase (
+                    category, subcategory, title, owner, status,
+                    update_highlight, content_detail, doc_links, last_updated
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                t.get("category", "義消業務"),
+                t.get("subcategory", ""),
+                t.get("title", ""),
+                t.get("owner", ""),
+                t.get("status", "常態辦理"),
+                t.get("update_highlight", ""),
+                t.get("content_detail", ""),
+                t.get("doc_links", ""),
+                t.get("last_updated", "")
+            ))
+            t_count += 1
+            
+    # 2. 還原 GuideDatabase
+    if "guides" in json_obj and isinstance(json_obj["guides"], list):
+        cursor.execute("DELETE FROM GuideDatabase")
+        for g in json_obj["guides"]:
+            cursor.execute("""
+                INSERT INTO GuideDatabase (
+                    scenario_num, title, icon, target_badge, description, linked_task_titles
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                g.get("scenario_num", 1),
+                g.get("title", ""),
+                g.get("icon", "📌"),
+                g.get("target_badge", ""),
+                g.get("description", ""),
+                g.get("linked_task_titles", "")
+            ))
+            g_count += 1
+            
+    # 3. 還原 FeedbackDatabase
+    if "feedbacks" in json_obj and isinstance(json_obj["feedbacks"], list):
+        cursor.execute("DELETE FROM FeedbackDatabase")
+        for fb in json_obj["feedbacks"]:
+            cursor.execute("""
+                INSERT INTO FeedbackDatabase (
+                    unit_name, submitter, category, content, contact_info,
+                    status, admin_reply, replied_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                fb.get("unit_name", ""),
+                fb.get("submitter", ""),
+                fb.get("category", "其他問題"),
+                fb.get("content", ""),
+                fb.get("contact_info", ""),
+                fb.get("status", "待處理"),
+                fb.get("admin_reply", ""),
+                fb.get("replied_at", ""),
+                fb.get("created_at", "")
+            ))
+            f_count += 1
+            
+    conn.commit()
+    conn.close()
+    
+    return True, f"已成功還原：{t_count} 筆業務、{g_count} 筆情境導航、{f_count} 筆同仁留言紀錄！"

@@ -1411,45 +1411,74 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
 
         st.markdown("---")
 
-        # 區塊 3: 上傳 CSV 還原與初始重設
-        st.markdown("##### 📤 3. 上傳 CSV 備份檔案進行還原 / 重設")
-        st.caption("💡 系統已升級**智慧多重編碼識別**（自動支援 UTF-8、Excel CP950、Big5），並對齊中英文所有標題欄位，100% 準確還原！")
+        # 區塊 3: 上傳備份檔案進行全系統還原 (支援 CSV 與 JSON 全系統備份包)
+        st.markdown("##### 📤 3. 上傳備份檔案進行系統還原")
+        st.caption("支援 **全系統完整備份包 (.json)** 以及 **業務主表 (.csv)**。系統會自動辨識檔案格式與中文編碼，一鍵精準復原！")
         col_res1, col_res2 = st.columns([1, 1])
         with col_res1:
-            uploaded_csv = st.file_uploader("選取先前的業務主表 CSV 備份檔上傳還原", type=["csv"], key="csv_restore_uploader_v3")
-            if uploaded_csv is not None:
-                import io
-                bytes_data = uploaded_csv.getvalue()
-                import_df = None
+            uploaded_backup = st.file_uploader(
+                "選取先前下載的備份檔案 (.json 或 .csv)", 
+                type=["json", "csv"], 
+                key="unified_restore_uploader"
+            )
+            if uploaded_backup is not None:
+                fname = uploaded_backup.name.lower()
+                bytes_data = uploaded_backup.getvalue()
                 
-                # 自動嘗試多種中文編碼 (徹底杜絕亂碼)
-                for enc in ["utf-8-sig", "utf-8", "cp950", "big5", "gbk"]:
+                # 模式 A: JSON 全系統完整備份包還原
+                if fname.endswith(".json"):
                     try:
-                        temp_df = pd.read_csv(io.BytesIO(bytes_data), encoding=enc)
-                        if len(temp_df.columns) >= 2 and len(temp_df) > 0:
-                            import_df = temp_df
-                            break
-                    except Exception:
-                        continue
-                        
-                if import_df is None:
-                    try:
-                        import_df = pd.read_csv(io.BytesIO(bytes_data))
+                        import json as py_json
+                        json_data = py_json.loads(bytes_data.decode("utf-8"))
+                        t_cnt = len(json_data.get("tasks", []))
+                        g_cnt = len(json_data.get("guides", []))
+                        f_cnt = len(json_data.get("feedbacks", []))
+                        st.success(f"📦 識別到【全系統完整備份包】：包含 {t_cnt} 筆業務、{g_cnt} 筆情境導引、{f_cnt} 筆同仁留言。")
+                        if st.button("🚀 確認一鍵全系統完整復原", type="primary", use_container_width=True):
+                            success, r_msg = db.import_full_system_from_json(json_data)
+                            if success:
+                                if hasattr(db, "clear_gsheet_url"):
+                                    db.clear_gsheet_url()
+                                st.session_state["has_auto_synced"] = True
+                                set_flash_message(f"🎉 {r_msg} 全系統已完美還原完成！", icon="📦")
+                                st.rerun()
+                            else:
+                                st.error(r_msg)
                     except Exception as e:
-                        st.error(f"❌ 檔案讀取失敗：{e}")
+                        st.error(f"❌ JSON 檔案解析失敗：{e}")
+                
+                # 模式 B: CSV 業務清單主表還原
+                else:
+                    import io
+                    import_df = None
+                    # 自動嘗試多種中文編碼 (徹底杜絕亂碼)
+                    for enc in ["utf-8-sig", "utf-8", "cp950", "big5", "gbk"]:
+                        try:
+                            temp_df = pd.read_csv(io.BytesIO(bytes_data), encoding=enc)
+                            if len(temp_df.columns) >= 2 and len(temp_df) > 0:
+                                import_df = temp_df
+                                break
+                        except Exception:
+                            continue
+                            
+                    if import_df is None:
+                        try:
+                            import_df = pd.read_csv(io.BytesIO(bytes_data))
+                        except Exception as e:
+                            st.error(f"❌ CSV 檔案讀取失敗：{e}")
 
-                if import_df is not None:
-                    st.success(f"✅ 檔案讀取成功！識別到 **{len(import_df)}** 筆業務資料。")
-                    if st.button("🚀 確認匯入並覆蓋還原資料庫", type="primary", use_container_width=True):
-                        restored_cnt = db.import_tasks_from_df(import_df, replace_all=True)
-                        if restored_cnt > 0:
-                            if hasattr(db, "clear_gsheet_url"):
-                                db.clear_gsheet_url()
-                            st.session_state["has_auto_synced"] = True
-                            set_flash_message(f"🎉 成功還原！已完整寫入 {restored_cnt} 筆業務資料至資料庫，所有分頁與內容已即時更新完成。", icon="📤")
-                            st.rerun()
-                        else:
-                            st.error("❌ 無法識別出有效業務資料，請確認上傳的 CSV 檔案是否包含業務標題！")
+                    if import_df is not None:
+                        st.success(f"📋 識別到【業務清單 CSV】：共 {len(import_df)} 筆業務資料。")
+                        if st.button("🚀 確認匯入並覆蓋還原業務資料庫", type="primary", use_container_width=True):
+                            restored_cnt = db.import_tasks_from_df(import_df, replace_all=True)
+                            if restored_cnt > 0:
+                                if hasattr(db, "clear_gsheet_url"):
+                                    db.clear_gsheet_url()
+                                st.session_state["has_auto_synced"] = True
+                                set_flash_message(f"🎉 成功還原！已完整還原 {restored_cnt} 筆業務資料，各分頁與內容已即時更新完成。", icon="📤")
+                                st.rerun()
+                            else:
+                                st.error("❌ 無法識別出有效業務資料，請確認上傳的 CSV 檔案是否包含業務標題！")
 
         with col_res2:
             st.warning("⚠️ **重設為官方標準清單**：將會清除目前所有修改並重新載入官方預設清單。")
