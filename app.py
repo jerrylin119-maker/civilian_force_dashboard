@@ -72,6 +72,29 @@ def search_tasks_for_jump(query_str):
     except Exception:
         return []
 
+def get_top_latest_highlights_safe(limit=3):
+    """安全取得最新更新且具異動重點的前 N 項業務公告 (毫秒時間排序)"""
+    try:
+        if hasattr(db, "get_top_latest_highlights"):
+            return db.get_top_latest_highlights(limit)
+    except Exception:
+        pass
+    try:
+        conn = db.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, category, subcategory, title, owner, status, update_highlight, last_updated FROM TaskDatabase WHERE update_highlight IS NOT NULL AND TRIM(update_highlight) != ''")
+        rows = cursor.fetchall()
+        conn.close()
+        tasks = [dict(r) for r in rows]
+        def p_dt(d):
+            try:
+                return pd.to_datetime(str(d).replace("/", "-").strip())
+            except Exception:
+                return datetime.min
+        return sorted(tasks, key=lambda t: (p_dt(t.get("last_updated")), t.get("id", 0)), reverse=True)[:limit]
+    except Exception:
+        return []
+
 # 初始化 Session State
 if "is_admin" not in st.session_state:
     st.session_state["is_admin"] = False
