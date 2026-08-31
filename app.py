@@ -666,7 +666,7 @@ def get_status_badge(status):
 
 
 def format_sop_content_smart(text):
-    """智慧解析並排版 SOP 內容 (自動支援 Excel/Word 貼上的表格、Markdown 表格與圖片)"""
+    """智慧解析並排版 SOP 內容 (精準識別真正的表格 vs 純文字條列清單)"""
     if not text or not text.strip():
         return ""
     
@@ -674,33 +674,50 @@ def format_sop_content_smart(text):
     new_lines = []
     tsv_buffer = []
     
-    for line in lines:
-        if "\t" in line:
-            parts = [p.strip() for p in line.split("\t")]
-            if len(parts) >= 2 and any(parts):
-                tsv_buffer.append(parts)
-                continue
-        if tsv_buffer:
-            max_cols = max(len(row) for row in tsv_buffer)
-            padded_rows = [row + [""] * (max_cols - len(row)) for row in tsv_buffer]
+    def flush_tsv(buffer):
+        if not buffer:
+            return []
+        # 僅當連續 2 行以上且欄位數 >= 2 時才視為真正表格
+        if len(buffer) >= 2 and all(len(r) >= 2 for r in buffer):
+            max_cols = max(len(row) for row in buffer)
+            padded_rows = [row + [""] * (max_cols - len(row)) for row in buffer]
             header = "| " + " | ".join(padded_rows[0]) + " |"
             sep = "| " + " | ".join([":---"] * max_cols) + " |"
             table_md = [header, sep]
             for row in padded_rows[1:]:
                 table_md.append("| " + " | ".join(row) + " |")
-            new_lines.extend(table_md)
+            return table_md
+        else:
+            # 否則作為一般排版清單文字輸出
+            res = []
+            for row in buffer:
+                res.append(" ".join(row))
+            return res
+
+    for line in lines:
+        stripped = line.strip()
+        # 若本行已有 Markdown 表格格式 (| 欄1 | 欄2 |)，直接保留
+        if stripped.startswith("|") and stripped.endswith("|"):
+            if tsv_buffer:
+                new_lines.extend(flush_tsv(tsv_buffer))
+                tsv_buffer = []
+            new_lines.append(line)
+            continue
+            
+        if "\t" in line:
+            parts = [p.strip() for p in line.split("\t") if p.strip()]
+            if len(parts) >= 2:
+                tsv_buffer.append(parts)
+                continue
+                
+        if tsv_buffer:
+            new_lines.extend(flush_tsv(tsv_buffer))
             tsv_buffer = []
+            
         new_lines.append(line)
         
     if tsv_buffer:
-        max_cols = max(len(row) for row in tsv_buffer)
-        padded_rows = [row + [""] * (max_cols - len(row)) for row in tsv_buffer]
-        header = "| " + " | ".join(padded_rows[0]) + " |"
-        sep = "| " + " | ".join([":---"] * max_cols) + " |"
-        table_md = [header, sep]
-        for row in padded_rows[1:]:
-            table_md.append("| " + " | ".join(row) + " |")
-        new_lines.extend(table_md)
+        new_lines.extend(flush_tsv(tsv_buffer))
         
     return "\n".join(new_lines)
 
@@ -797,10 +814,11 @@ def render_doc_links(links_text):
                 st.markdown(f"<a href='{orig_url}' target='_blank'>🔗 點擊開啟圖片：{img_label}</a>", unsafe_allow_html=True)
 
 
-# 輔助函式：渲染單張業務卡片 (支援被點擊直達時高亮與自動展開)
+# 輔助函式：渲染單張業務卡片 (支援維護模式直接在卡片上編輯、點擊直達聚焦展開)
 def render_task_card(task):
     is_targeted = bool(st.session_state.get("target_task_title") == task["title"])
     has_highlight = bool(task.get("update_highlight") and str(task["update_highlight"]).strip())
+    is_admin_mode = bool(st.session_state.get("is_admin"))
     
     if is_targeted:
         card_class = "task-card task-card-target-focus"
@@ -816,7 +834,6 @@ def render_task_card(task):
     owner_str = task['owner'] or '未指派'
     updated_str = task['last_updated']
     
-    # 採用緊湊 HTML 避免 Markdown 4空格縮排誤判為代碼區塊
     card_html = (
         f'<div class="{card_class}">'
         f'<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;">'
@@ -831,7 +848,7 @@ def render_task_card(task):
         highlight_html = f'<div class="highlight-banner">{task["update_highlight"]}</div>'
         st.markdown(highlight_html, unsafe_allow_html=True)
 
-    # 若為點擊直達之業務，自動展開其 SOP！
+    # 檢視狀態：查看完整 SOP 作業規範與附件
     expander_expanded = is_targeted
     with st.expander("📖 查看完整 SOP 作業規範、工作內容細節與附件連結", expanded=expander_expanded):
         if task.get("content_detail") and task["content_detail"].strip():
@@ -842,6 +859,72 @@ def render_task_card(task):
         if task.get("doc_links"):
             st.markdown("---")
             render_doc_links(task["doc_links"])
+
+    # ★ 維護模式專屬：直接在該業務卡片下方出現【✏️ 快速編輯此業務】
+    if is_admin_mode:
+        with st.expander(f"✏️ 【維護模式】直接修改此業務（ID #{task['id']} — {task['title']}）", expanded=False):
+            with st.form(f"inline_edit_task_form_{task['id']}"):
+                col_in1, col_in2, col_in3 = st.columns([2, 2, 2])
+                with col_in1:
+                    c_idx = db.CATEGORIES.index(task["category"]) if task["category"] in db.CATEGORIES else 0
+                    in_cat = st.selectbox("業務分類 *", db.CATEGORIES, index=c_idx, key=f"in_cat_{task['id']}")
+                with col_in2:
+                    in_subcat = st.text_input("子項目", value=task["subcategory"] or "", key=f"in_subcat_{task['id']}")
+                with col_in3:
+                    cur_o = task["owner"] or ""
+                    d_officers = getattr(db, "DEFAULT_OFFICERS", ["廖昱翔科員、林威宇小隊長", "廖昱翔科員", "林威宇小隊長", "陳怡忻分隊長", "尤仁宏秘書", "民力訓練科全體同仁"])
+                    all_o_opts = list(dict.fromkeys(d_officers + ([cur_o] if cur_o else []) + ["➕ 自訂其他承辦人..."]))
+                    o_idx = all_o_opts.index(cur_o) if cur_o in all_o_opts else 0
+                    in_owner_sel = st.selectbox("承辦人 (下拉選單) *", all_o_opts, index=o_idx, key=f"in_own_sel_{task['id']}")
+
+                in_custom_owner = ""
+                if in_owner_sel == "➕ 自訂其他承辦人...":
+                    in_custom_owner = st.text_input("請輸入自訂承辦人", value=cur_o, key=f"in_own_cust_{task['id']}")
+
+                col_in4, col_in5 = st.columns([4, 2])
+                with col_in4:
+                    in_title = st.text_input("業務項目名稱 *", value=task["title"] or "", key=f"in_title_{task['id']}")
+                with col_in5:
+                    s_idx = db.STATUSES.index(task["status"]) if task["status"] in db.STATUSES else 0
+                    in_status = st.selectbox("執行狀態 *", db.STATUSES, index=s_idx, key=f"in_status_{task['id']}")
+
+                in_highlight = st.text_area(
+                    "★ 最新異動 / 宣導重點 (紅字醒目提示，若無可留空)",
+                    value=task["update_highlight"] or "",
+                    height=70,
+                    key=f"in_high_{task['id']}"
+                )
+
+                in_content = st.text_area(
+                    "詳細工作內容 / SOP 作業指引 (支援直接貼上 Excel 表格與 Markdown 排版)",
+                    value=task["content_detail"] or "",
+                    height=220,
+                    key=f"in_content_{task['id']}"
+                )
+
+                in_doc_links = st.text_area(
+                    "相關表單、公文法規或雲端硬碟連結 (每行一筆)",
+                    value=task["doc_links"] or "",
+                    height=90,
+                    key=f"in_links_{task['id']}"
+                )
+
+                btn_in_save = st.form_submit_button("💾 立即儲存此業務修改", type="primary", use_container_width=True)
+                if btn_in_save:
+                    final_in_owner = in_custom_owner.strip() if in_owner_sel == "➕ 自訂其他承辦人..." else in_owner_sel
+                    db.update_single_task(
+                        task['id'],
+                        in_cat,
+                        in_subcat.strip(),
+                        in_title.strip(),
+                        final_in_owner,
+                        in_status,
+                        in_highlight.strip(),
+                        in_content.strip(),
+                        in_doc_links.strip()
+                    )
+                    set_flash_message(f"🎉 成功更新！ID #{task['id']}【{in_title}】已完成儲存並同步至前台。", icon="💾")
+                    st.rerun()
 
 
 # ==================== 頂部主導覽標籤列 (支援程式化切換與點選) ====================
