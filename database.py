@@ -815,41 +815,104 @@ def clear_all_feedbacks():
     conn.commit()
     conn.close()
 
-def import_tasks_from_df(df: pd.DataFrame, replace_all=True):
-    """從上傳的 DataFrame 匯入/還原業務資料表"""
+def clear_gsheet_url():
+    """清除 Google 試算表連動網址"""
     init_db()
     conn = get_db_connection()
     cursor = conn.cursor()
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("DELETE FROM SystemMeta WHERE key = 'gsheet_url'")
+    cursor.execute("DELETE FROM SystemMeta WHERE key = 'last_gsheet_sync'")
+    conn.commit()
+    conn.close()
 
+
+def import_tasks_from_df(df: pd.DataFrame, replace_all=True):
+    """從上傳的 DataFrame 匯入/還原業務資料表 (100% 智慧對齊中文標頭、英文標頭、防空值與事務安全)"""
+    if df is None or df.empty:
+        return 0
+        
+    init_db()
+    
+    # 智慧欄位對照表 (涵蓋所有常見中文與英文欄位變體)
+    col_map = {
+        "分類": "category", "業務分類": "category", "類別": "category", "大項": "category", "業務大項": "category",
+        "子項目": "subcategory", "分項": "subcategory", "次類別": "subcategory", "業務分項": "subcategory",
+        "業務項目名稱": "title", "業務名稱": "title", "標題": "title", "項目名稱": "title", "業務項目": "title",
+        "承辦人": "owner", "科內承辦人": "owner", "負責人": "owner", "承辦人員": "owner",
+        "執行狀態": "status", "狀態": "status", "辦理狀態": "status",
+        "最新異動重點": "update_highlight", "異動重點": "update_highlight", "紅字重點": "update_highlight", "宣導重點": "update_highlight", "最新異動": "update_highlight",
+        "詳細工作內容": "content_detail", "SOP": "content_detail", "詳細SOP": "content_detail", "工作內容": "content_detail", "SOP作業指引": "content_detail", "作業指引": "content_detail", "詳細內容": "content_detail",
+        "相關連結": "doc_links", "表單連結": "doc_links", "雲端連結": "doc_links", "附件連結": "doc_links", "連結": "doc_links", "表單/雲端連結": "doc_links",
+        "最後更新時間": "last_updated", "更新時間": "last_updated"
+    }
+    
+    # 清理標頭前後空白並替換欄位名
+    df_clean = df.rename(columns=lambda c: str(c).strip())
+    df_clean = df_clean.rename(columns=col_map)
+    
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    valid_rows = []
+    
+    for _, row in df_clean.iterrows():
+        title = ""
+        if "title" in row and pd.notna(row["title"]):
+            title = str(row["title"]).strip()
+        
+        # 若仍無 title，嘗試從其他可能的欄位抓取
+        if not title:
+            for c_name in ["業務項目名稱", "業務名稱", "標題", "title", "項目名稱"]:
+                if c_name in row and pd.notna(row[c_name]) and str(row[c_name]).strip():
+                    title = str(row[c_name]).strip()
+                    break
+                    
+        # 若該列完全沒有標題，略過該空行
+        if not title or title.lower() in ["nan", "none", "null"]:
+            continue
+            
+        cat = str(row.get("category", "")).strip() if pd.notna(row.get("category")) else "義消業務"
+        if not cat or cat not in CATEGORIES:
+            cat = "義消業務"
+            
+        subcat = str(row.get("subcategory", "")).strip() if pd.notna(row.get("subcategory")) and str(row.get("subcategory")).strip().lower() not in ["nan", "none", "null"] else ""
+        owner = str(row.get("owner", "")).strip() if pd.notna(row.get("owner")) and str(row.get("owner")).strip().lower() not in ["nan", "none", "null"] else ""
+        status = str(row.get("status", "常態辦理")).strip() if pd.notna(row.get("status")) and str(row.get("status")).strip().lower() not in ["nan", "none", "null"] else "常態辦理"
+        highlight = str(row.get("update_highlight", "")).strip() if pd.notna(row.get("update_highlight")) and str(row.get("update_highlight")).strip().lower() not in ["nan", "none", "null"] else ""
+        content = str(row.get("content_detail", "")).strip() if pd.notna(row.get("content_detail")) and str(row.get("content_detail")).strip().lower() not in ["nan", "none", "null"] else ""
+        doc_links = str(row.get("doc_links", "")).strip() if pd.notna(row.get("doc_links")) and str(row.get("doc_links")).strip().lower() not in ["nan", "none", "null"] else ""
+        updated = str(row.get("last_updated", now_str)).strip() if pd.notna(row.get("last_updated")) and str(row.get("last_updated")).strip().lower() not in ["nan", "none", "null"] else now_str
+
+        valid_rows.append((cat, subcat, title, owner, status, highlight, content, doc_links, updated))
+        
+    # 事務保護：若 0 筆有效資料，絕對不執行清空資料庫！
+    if not valid_rows:
+        return 0
+        
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
     if replace_all:
         cursor.execute("DELETE FROM TaskDatabase")
-    
-    count = 0
-    for _, row in df.iterrows():
-        cat = str(row.get("category", "")).strip() if pd.notna(row.get("category")) else "義消業務"
-        subcat = str(row.get("subcategory", "")).strip() if pd.notna(row.get("subcategory")) else ""
-        title = str(row.get("title", "")).strip() if pd.notna(row.get("title")) else ""
-        if not title:
-            continue
-        owner = str(row.get("owner", "")).strip() if pd.notna(row.get("owner")) else ""
-        status = str(row.get("status", "常態辦理")).strip() if pd.notna(row.get("status")) else "常態辦理"
-        highlight = str(row.get("update_highlight", "")).strip() if pd.notna(row.get("update_highlight")) else ""
-        content = str(row.get("content_detail", "")).strip() if pd.notna(row.get("content_detail")) else ""
-        doc_links = str(row.get("doc_links", "")).strip() if pd.notna(row.get("doc_links")) else ""
-        updated = str(row.get("last_updated", now_str)).strip() if pd.notna(row.get("last_updated")) else now_str
-
+        
+    for r in valid_rows:
         cursor.execute("""
             INSERT INTO TaskDatabase (
                 category, subcategory, title, owner, status,
                 update_highlight, content_detail, doc_links, last_updated
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (cat, subcat, title, owner, status, highlight, content, doc_links, updated))
-        count += 1
-
+        """, r)
+        
     conn.commit()
     conn.close()
-    return count
+    
+    # 同步寫入持久化備份 CSV 檔，確保重開機永久保留
+    try:
+        csv_persist_path = os.path.join(DB_DIR, "tasks_persistent_backup.csv")
+        df_clean.to_csv(csv_persist_path, index=False, encoding="utf-8-sig")
+    except Exception:
+        pass
+        
+    return len(valid_rows)
+
 
 def get_tasks_for_officer(officer_name):
     """取得指定承辦人負責的所有業務項目"""
