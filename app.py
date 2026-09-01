@@ -459,10 +459,10 @@ CATEGORY_ICON_MAP = {
 
 
 def jump_to_task_view(target_category, target_title):
-    """跨頁跳轉直達指定業務並自動定位展開 SOP (雙重同步 Session State 與 Radio Widget)"""
+    """跨頁跳轉直達指定業務並自動定位展開 SOP"""
     tab_name = CATEGORY_ICON_MAP.get(target_category.strip(), (target_category.strip(), "📄"))[0]
-    st.session_state["active_tab"] = tab_name
     st.session_state["top_main_nav"] = tab_name
+    st.session_state["active_tab"] = tab_name
     st.session_state["target_task_title"] = target_title
     set_flash_message(f"🚀 已切換至【{tab_name}】並為您定位展開【{target_title}】！", icon="🎯")
     st.rerun()
@@ -541,7 +541,9 @@ with st.sidebar:
         if st.button("🔓 啟用線上維護模式", use_container_width=True):
             if admin_pass in ["119", "admin119", "minli119"]:
                 st.session_state["is_admin"] = True
-                set_flash_message("✅ 已切換至科內維護模式！所有表格與設定均可即時線上編輯。", icon="🔓")
+                st.session_state["top_main_nav"] = "⚙️ 科內線上維護 (Excel介面)"
+                st.session_state["active_tab"] = "⚙️ 科內線上維護 (Excel介面)"
+                set_flash_message("✅ 已切換至科內維護模式！已為您自動開啟【⚙️ 科內線上維護】分頁。", icon="🔓")
                 st.rerun()
             else:
                 st.error("❌ 密碼錯誤，請洽民力訓練科系統管理員。")
@@ -943,21 +945,14 @@ tab_names = [
 if st.session_state["is_admin"]:
     tab_names.append("⚙️ 科內線上維護 (Excel介面)")
 
-if st.session_state.get("active_tab") not in tab_names:
-    st.session_state["active_tab"] = tab_names[0]
-
-# 強制同步 Streamlit Radio Widget 內部狀態，確保 100% 準確切換頁面
 if "top_main_nav" not in st.session_state or st.session_state["top_main_nav"] not in tab_names:
-    st.session_state["top_main_nav"] = st.session_state["active_tab"]
-elif st.session_state.get("active_tab") and st.session_state["active_tab"] != st.session_state.get("top_main_nav"):
-    st.session_state["top_main_nav"] = st.session_state["active_tab"]
-
-cur_tab_index = tab_names.index(st.session_state["top_main_nav"])
+    st.session_state["top_main_nav"] = st.session_state.get("active_tab", tab_names[0])
+    if st.session_state["top_main_nav"] not in tab_names:
+        st.session_state["top_main_nav"] = tab_names[0]
 
 selected_tab = st.radio(
     "主頁導覽",
     tab_names,
-    index=cur_tab_index,
     horizontal=True,
     label_visibility="collapsed",
     key="top_main_nav"
