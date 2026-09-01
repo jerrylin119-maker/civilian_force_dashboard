@@ -457,6 +457,17 @@ CATEGORY_ICON_MAP = {
     "其他推動業務": ("🌟 其他推動業務", "🌟")
 }
 
+
+def jump_to_task_view(target_category, target_title):
+    """跨頁跳轉直達指定業務並自動定位展開 SOP (雙重同步 Session State 與 Radio Widget)"""
+    tab_name = CATEGORY_ICON_MAP.get(target_category.strip(), (target_category.strip(), "📄"))[0]
+    st.session_state["active_tab"] = tab_name
+    st.session_state["top_main_nav"] = tab_name
+    st.session_state["target_task_title"] = target_title
+    set_flash_message(f"🚀 已切換至【{tab_name}】並為您定位展開【{target_title}】！", icon="🎯")
+    st.rerun()
+
+
 # 側邊欄設計 (★ 依承辦人即時列出業務並支援點擊直達切換頁面)
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/fire-truck.png", width=60)
@@ -488,10 +499,7 @@ with st.sidebar:
             btn_label = f"{cat_icon} {ot['title']}"
             
             if st.button(btn_label, key=f"btn_jump_task_{ot['id']}", use_container_width=True):
-                st.session_state["active_tab"] = target_tab_name
-                st.session_state["target_task_title"] = ot["title"]
-                set_flash_message(f"🚀 已切換至【{target_tab_name}】並為您定位【{ot['title']}】！", icon="🎯")
-                st.rerun()
+                jump_to_task_view(ot["category"], ot["title"])
 
     st.markdown("---")
 
@@ -522,10 +530,7 @@ with st.sidebar:
                 target_tab_name = CATEGORY_ICON_MAP.get(s_task["category"], (s_task["category"], "📄"))[0]
                 cat_icon = CATEGORY_ICON_MAP.get(s_task["category"], ("", "📄"))[1]
                 if st.button(f"{cat_icon} {s_task['title']}", key=f"btn_search_jump_{s_task['id']}", use_container_width=True):
-                    st.session_state["active_tab"] = target_tab_name
-                    st.session_state["target_task_title"] = s_task["title"]
-                    set_flash_message(f"🚀 已為您定位至【{s_task['title']}】！", icon="🎯")
-                    st.rerun()
+                    jump_to_task_view(s_task["category"], s_task["title"])
 
     st.markdown("---")
 
@@ -641,10 +646,7 @@ if top_highlights:
             """, unsafe_allow_html=True)
             
             if st.button(f"🚀 點擊直達【{hl_item['title']}】", key=f"btn_hl_jump_{hl_item['id']}", use_container_width=True):
-                st.session_state["active_tab"] = target_tab_name
-                st.session_state["target_task_title"] = hl_item["title"]
-                set_flash_message(f"🚀 已為您切換至【{target_tab_name}】並展開【{hl_item['title']}】SOP！", icon="🎯")
-                st.rerun()
+                jump_to_task_view(hl_item["category"], hl_item["title"])
                 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -941,10 +943,16 @@ tab_names = [
 if st.session_state["is_admin"]:
     tab_names.append("⚙️ 科內線上維護 (Excel介面)")
 
-if st.session_state["active_tab"] not in tab_names:
+if st.session_state.get("active_tab") not in tab_names:
     st.session_state["active_tab"] = tab_names[0]
 
-cur_tab_index = tab_names.index(st.session_state["active_tab"])
+# 強制同步 Streamlit Radio Widget 內部狀態，確保 100% 準確切換頁面
+if "top_main_nav" not in st.session_state or st.session_state["top_main_nav"] not in tab_names:
+    st.session_state["top_main_nav"] = st.session_state["active_tab"]
+elif st.session_state.get("active_tab") and st.session_state["active_tab"] != st.session_state.get("top_main_nav"):
+    st.session_state["top_main_nav"] = st.session_state["active_tab"]
+
+cur_tab_index = tab_names.index(st.session_state["top_main_nav"])
 
 selected_tab = st.radio(
     "主頁導覽",
