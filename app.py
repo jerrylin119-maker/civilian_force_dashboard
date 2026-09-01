@@ -669,8 +669,43 @@ def get_status_badge(status):
 
 
 
+def is_numbered_or_heading_line(line):
+    """判斷該行是否為公文/作業條列項目 (編號項目絕不轉為表格)"""
+    s = line.strip()
+    if not s:
+        return False
+    # 中文大寫數字編號 (一、, 二、, 十、等)
+    if re.match(r'^[一二三四五六七八九十百]+[、.．]', s):
+        return True
+    # 括弧編號 ((一), (二), (1), (2), （一）, （二）等)
+    if re.match(r'^[\(（][一二三四五六七八九十0-9a-zA-Z]+[\)）]', s):
+        return True
+    # 阿拉伯數字編號 (1., 2., 10., 1、, 2、等)
+    if re.match(r'^\d+[.、．]', s):
+        return True
+    # 英文字母編號 (A., B., a., b. 等)
+    if re.match(r'^[A-Za-z][.、．]', s):
+        return True
+    # 條列符號 (*, -, •, ▪, ► 等)
+    if re.match(r'^[•\*\-\–—▪▫►▶]\s*', s):
+        return True
+    # 公文標準段落標題 (主旨：, 說明：, 依據：, 辦法：, 備註：, 注意事項：, 辦理地點：, 比賽項目：等)
+    if re.match(r'^(主旨|說明|依據|辦法|備註|注意事項|比賽項目|辦理地點|辦理時間|集訓規劃|賽事獎金)[：:\s]', s):
+        return True
+    return False
+
+def clean_numbered_line(line):
+    """將 Word 條列編號後的定位字元 (Tab) 轉為一般空格，保持乾淨排版"""
+    s = line.strip()
+    s = re.sub(r'^([一二三四五六七八九十百]+[、.．])\t+', r'\1 ', s)
+    s = re.sub(r'^([\(（][一二三四五六七八九十0-9a-zA-Z]+[\)）])\t+', r'\1 ', s)
+    s = re.sub(r'^(\d+[.、．])\t+', r'\1 ', s)
+    s = re.sub(r'^([A-Za-z][.、．])\t+', r'\1 ', s)
+    s = s.replace('\t', '  ')
+    return s
+
 def format_sop_content_smart(text):
-    """智慧解析並排版 SOP 內容 (精準識別真正的表格 vs 純文字條列清單)"""
+    """智慧解析並排版 SOP 內容 (自動保護公文條列編號，僅將真實表格轉為專業樣式)"""
     if not text or not text.strip():
         return ""
     
@@ -681,7 +716,7 @@ def format_sop_content_smart(text):
     def flush_tsv(buffer):
         if not buffer:
             return []
-        # 僅當連續 2 行以上且欄位數 >= 2 時才視為真正表格
+        # 僅當連續 2 行以上且每行欄位數 >= 2 時才視為真正表格
         if len(buffer) >= 2 and all(len(r) >= 2 for r in buffer):
             max_cols = max(len(row) for row in buffer)
             padded_rows = [row + [""] * (max_cols - len(row)) for row in buffer]
@@ -692,14 +727,17 @@ def format_sop_content_smart(text):
                 table_md.append("| " + " | ".join(row) + " |")
             return table_md
         else:
-            # 否則作為一般排版清單文字輸出
-            res = []
-            for row in buffer:
-                res.append(" ".join(row))
-            return res
+            return [" ".join(row) for row in buffer]
 
     for line in lines:
         stripped = line.strip()
+        if not stripped:
+            if tsv_buffer:
+                new_lines.extend(flush_tsv(tsv_buffer))
+                tsv_buffer = []
+            new_lines.append("")
+            continue
+            
         # 若本行已有 Markdown 表格格式 (| 欄1 | 欄2 |)，直接保留
         if stripped.startswith("|") and stripped.endswith("|"):
             if tsv_buffer:
@@ -708,8 +746,17 @@ def format_sop_content_smart(text):
             new_lines.append(line)
             continue
             
+        # 若為公文條列項目或編號 (例如 (一), (二), 1., 2., 主旨:, 說明:)，絕對不進表格
+        if is_numbered_or_heading_line(stripped):
+            if tsv_buffer:
+                new_lines.extend(flush_tsv(tsv_buffer))
+                tsv_buffer = []
+            new_lines.append(clean_numbered_line(line))
+            continue
+            
+        # 判斷是否為真實表格資料列 (由 Tab 分隔多欄)
         if "\t" in line:
-            parts = [p.strip() for p in line.split("\t") if p.strip()]
+            parts = [p.strip() for p in line.split("\t")]
             if len(parts) >= 2:
                 tsv_buffer.append(parts)
                 continue
