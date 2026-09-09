@@ -1663,6 +1663,101 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
 
         st.markdown("---")
 
+
+        st.markdown("---")
+
+        # 區塊 0: GitHub 雲端一鍵備份與還原
+        st.markdown("##### ☁️ 0. GitHub 雲端一鍵備份與還原")
+        st.caption("將全系統資料（業務、情境、留言、交辦事項）推送至您的 GitHub 倉庫作為永久雲端備份，隨時可一鍵還原。")
+
+        # 取得上次同步資訊
+        last_push_time, last_push_summary = db.get_cloud_sync_meta() if hasattr(db, "get_cloud_sync_meta") else ("", "")
+        saved_pat = db.get_github_pat() if hasattr(db, "get_github_pat") else ""
+
+        # 同步狀態橫幅
+        if last_push_time:
+            st.markdown(f"""
+            <div style="background: linear-gradient(to right, #f0fdf4, #dcfce7); border: 1px solid #86efac; border-left: 5px solid #16a34a; border-radius: 8px; padding: 0.7rem 1.2rem; margin-bottom: 0.8rem; display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <span style="font-weight:700; color:#15803d;">✅ 上次雲端同步成功</span>
+                    <span style="font-size:0.85rem; color:#16a34a; margin-left:0.5rem;">{last_push_summary}</span>
+                </div>
+                <span style="font-size:0.82rem; color:#4ade80; background:#166534; padding:2px 10px; border-radius:12px;">🕒 {last_push_time}</span>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.info("尚未執行雲端備份，請輸入 GitHub PAT 後點擊「☁️ 一鍵上傳至雲端」。")
+
+        col_cloud1, col_cloud2 = st.columns([3, 1])
+        with col_cloud1:
+            github_pat_input = st.text_input(
+                "GitHub 個人存取權杖 (Personal Access Token)",
+                value=saved_pat,
+                type="password",
+                placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxx",
+                help="請到 GitHub → Settings → Developer settings → Personal access tokens → 建立新 Token（勾選 repo 權限）"
+            )
+        with col_cloud2:
+            if st.button("💾 儲存 PAT 設定", use_container_width=True, key="save_pat_btn"):
+                if github_pat_input.strip():
+                    db.save_github_pat(github_pat_input.strip())
+                    set_flash_message("✅ GitHub PAT 已儲存！下次操作無需重新輸入。", icon="🔑")
+                    st.rerun()
+
+        GITHUB_OWNER = "jerrylin119-maker"
+        GITHUB_REPO = "civilian_force_dashboard"
+
+        col_push, col_restore = st.columns([1, 1])
+        with col_push:
+            push_clicked = st.button("☁️ 一鍵上傳至雲端備份", type="primary", use_container_width=True, key="cloud_push_btn")
+            if push_clicked:
+                pat = github_pat_input.strip() or saved_pat
+                if not pat:
+                    st.error("請先輸入並儲存 GitHub PAT！")
+                else:
+                    with st.spinner("正在將全系統資料打包並推送至 GitHub 雲端..."):
+                        ok, summary, err = db.push_full_backup_to_github(GITHUB_OWNER, GITHUB_REPO, pat)
+                    if ok:
+                        set_flash_message(f"🎉 雲端備份成功！已上傳：{summary}", icon="☁️")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ 上傳失敗：{err}\n💡 請確認 PAT 正確且具有 repo 寫入權限。")
+
+        with col_restore:
+            restore_clicked = st.button("🔄 從雲端還原上次備份", type="secondary", use_container_width=True, key="cloud_restore_btn")
+            if restore_clicked:
+                pat = github_pat_input.strip() or saved_pat
+                if not pat:
+                    st.error("請先輸入並儲存 GitHub PAT！")
+                elif not last_push_time:
+                    st.warning("尚未有雲端備份紀錄，請先執行「一鍵上傳至雲端備份」。")
+                else:
+                    if "cloud_restore_confirm" not in st.session_state:
+                        st.session_state["cloud_restore_confirm"] = True
+                        st.rerun()
+
+        if st.session_state.get("cloud_restore_confirm"):
+            st.warning(f"⚠️ 確認要從雲端還原？這將覆蓋目前所有本機資料，還原至上次備份（{last_push_time}：{last_push_summary}）。")
+            col_cf1, col_cf2 = st.columns([1, 1])
+            with col_cf1:
+                if st.button("✅ 確認還原", type="primary", use_container_width=True, key="confirm_restore_yes"):
+                    pat = github_pat_input.strip() or saved_pat
+                    with st.spinner("正在從 GitHub 拉取備份資料..."):
+                        ok, backup_obj, err = db.fetch_backup_from_github(GITHUB_OWNER, GITHUB_REPO, pat)
+                    if ok:
+                        ok2, msg2 = db.restore_from_github_backup(backup_obj)
+                        st.session_state.pop("cloud_restore_confirm", None)
+                        set_flash_message(f"🎉 雲端還原成功！{msg2}", icon="🔄")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ 從雲端拉取備份失敗：{err}")
+                        st.session_state.pop("cloud_restore_confirm", None)
+            with col_cf2:
+                if st.button("❌ 取消", use_container_width=True, key="confirm_restore_no"):
+                    st.session_state.pop("cloud_restore_confirm", None)
+                    st.rerun()
+
+
         # 區塊 2: 全系統多資料表完整匯出
         st.markdown("##### 📦 2. 全系統完整資料匯出與打包備份")
         st.caption("此處提供「全系統完整整合資料包 (JSON)」以及個別資料表的完整 CSV 匯出（包含業務主表、承辦人導航情境表、我有話要說同仁留言表全部欄位）。")

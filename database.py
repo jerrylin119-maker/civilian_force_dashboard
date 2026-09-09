@@ -1267,3 +1267,150 @@ def delete_assigned_task(task_id):
     cursor.execute("DELETE FROM AssignedTasks WHERE id = ?", (task_id,))
     conn.commit()
     conn.close()
+
+
+def save_github_pat(pat):
+    """儲存 GitHub PAT 至 SystemMeta (僅本機，不會推送到 GitHub)"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('github_pat', ?)", (pat.strip(),))
+    conn.commit()
+    conn.close()
+
+def get_github_pat():
+    """取得已儲存的 GitHub PAT"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM SystemMeta WHERE key = 'github_pat'")
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else ""
+
+def get_cloud_sync_meta():
+    """取得雲端同步的最後上傳時間與備份摘要"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM SystemMeta WHERE key = 'last_cloud_push_time'")
+    r1 = cursor.fetchone()
+    cursor.execute("SELECT value FROM SystemMeta WHERE key = 'last_cloud_push_summary'")
+    r2 = cursor.fetchone()
+    conn.close()
+    return (r1[0] if r1 else ""), (r2[0] if r2 else "")
+
+def push_full_backup_to_github(owner, repo, pat, branch="main", backup_path="cloud_backup/minli_backup.json"):
+    """將全系統資料打包成 JSON，推送到 GitHub 倉庫指定路徑（覆蓋同名檔案）"""
+    import urllib.request
+    import base64
+    import json as py_json
+
+    init_db()
+    full_data = get_full_system_data()
+    # 加入交辦事項
+    assigned = get_all_assigned_tasks() if "get_all_assigned_tasks" in dir() else []
+    full_data["assigned_tasks"] = assigned
+    full_data["backup_created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    json_content = py_json.dumps(full_data, ensure_ascii=False, indent=2)
+    content_b64 = base64.b64encode(json_content.encode("utf-8")).decode("ascii")
+
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{backup_path}"
+    headers = {
+        "Authorization": f"token {pat}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "User-Agent": "ttfd-minli-dashboard"
+    }
+
+    # 先查是否已存在（取得 SHA 用於更新）
+    sha = None
+    try:
+        get_req = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(get_req, timeout=10) as resp:
+            existing = py_json.loads(resp.read().decode("utf-8"))
+            sha = existing.get("sha")
+    except Exception:
+        sha = None
+
+    task_cnt = len(full_data.get("tasks", []))
+    summary = f"{task_cnt} 筆業務 | {len(full_data.get('guides', []))} 情境 | {len(full_data.get('feedbacks', []))} 留言 | {len(assigned)} 交辦事項"
+    push_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    commit_msg = f"chore: 自動備份民力訓練科業務資料 ({push_time})"
+
+    payload = {
+        "message": commit_msg,
+        "content": content_b64,
+        "branch": branch
+    }
+    if sha:
+        payload["sha"] = sha
+
+    data_bytes = py_json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    put_req = urllib.request.Request(api_url, data=data_bytes, headers=headers, method="PUT")
+    try:
+        with urllib.request.urlopen(put_req, timeout=20) as resp:
+            resp.read()
+        # 儲存同步時間
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('last_cloud_push_time', ?)", (push_time,))
+        cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('last_cloud_push_summary', ?)", (summary,))
+        conn.commit()
+        conn.close()
+        return True, summary, ""
+    except Exception as e:
+        return False, "", str(e)
+
+def fetch_backup_from_github(owner, repo, pat, branch="main", backup_path="cloud_backup/minli_backup.json"):
+    """從 GitHub 倉庫拉取最新備份 JSON，回傳 dict"""
+    import urllib.request
+    import base64
+    import json as py_json
+
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{backup_path}?ref={branch}"
+    headers = {
+        "Authorization": f"token {pat}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "ttfd-minli-dashboard"
+    }
+    req = urllib.request.Request(api_url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = py_json.loads(resp.read().decode("utf-8"))
+        content_b64 = data.get("content", "")
+        content_str = base64.b64decode(content_b64).decode("utf-8")
+        backup_obj = py_json.loads(content_str)
+        return True, backup_obj, ""
+    except Exception as e:
+        return False, None, str(e)
+
+def restore_from_github_backup(backup_obj):
+    """從備份 JSON dict 還原全系統資料（含交辦事項）"""
+    if not backup_obj or not isinstance(backup_obj, dict):
+        return False, "無效的備份格式！"
+    ok, msg = import_full_system_from_json(backup_obj)
+    # 還原交辦事項 (若備份包含此表)
+    assigned_list = backup_obj.get("assigned_tasks", [])
+    if assigned_list:
+        init_db()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM AssignedTasks")
+        for at in assigned_list:
+            cursor.execute("""
+                INSERT INTO AssignedTasks (item_content, deadline_note, is_done, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                at.get("item_content", ""),
+                at.get("deadline_note", ""),
+                at.get("is_done", 0),
+                at.get("sort_order", 0),
+                at.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                at.get("updated_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            ))
+        conn.commit()
+        conn.close()
+    return ok, msg
+
