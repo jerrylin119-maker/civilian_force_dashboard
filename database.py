@@ -1417,3 +1417,61 @@ def restore_from_github_backup(backup_obj):
         conn.close()
     return ok, msg
 
+GITHUB_OWNER = "jerrylin119-maker"
+GITHUB_REPO  = "civilian_force_dashboard"
+GITHUB_BACKUP_PATH = "cloud_backup/minli_backup.json"
+
+def fetch_backup_public(owner=GITHUB_OWNER, repo=GITHUB_REPO,
+                        branch="main", backup_path=GITHUB_BACKUP_PATH):
+    """不需要 PAT，直接從 GitHub raw URL 取得備份 JSON（公開倉庫適用）"""
+    import urllib.request
+    import json as py_json
+
+    raw_url = (
+        f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{backup_path}"
+    )
+    try:
+        req = urllib.request.Request(
+            raw_url,
+            headers={"User-Agent": "ttfd-minli-dashboard", "Cache-Control": "no-cache"}
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            content = resp.read().decode("utf-8")
+        backup_obj = py_json.loads(content)
+        return True, backup_obj, ""
+    except Exception as e:
+        return False, None, str(e)
+
+def auto_restore_on_startup():
+    """若本機 DB 業務資料表是空的，自動從 GitHub 公開備份還原（無需 PAT）"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM TaskDatabase")
+    task_count = cursor.fetchone()[0]
+    conn.close()
+
+    if task_count > 0:
+        return False, "DB 已有資料，無需還原"
+
+    ok, backup_obj, err = fetch_backup_public()
+    if not ok or not backup_obj:
+        return False, f"無法取得備份：{err}"
+
+    ok2, msg = restore_from_github_backup(backup_obj)
+    push_time = backup_obj.get("backup_created_at", "")
+    if ok2 and push_time:
+        # 記錄回 meta（這次 session 內有效）
+        conn2 = get_db_connection()
+        c2 = conn2.cursor()
+        task_cnt = len(backup_obj.get("tasks", []))
+        summary = (f"{task_cnt} 筆業務 | "
+                   f"{len(backup_obj.get('guides', []))} 情境 | "
+                   f"{len(backup_obj.get('feedbacks', []))} 留言 | "
+                   f"{len(backup_obj.get('assigned_tasks', []))} 交辦事項")
+        c2.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('last_cloud_push_time', ?)", (push_time,))
+        c2.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('last_cloud_push_summary', ?)", (summary,))
+        conn2.commit()
+        conn2.close()
+    return ok2, msg
+

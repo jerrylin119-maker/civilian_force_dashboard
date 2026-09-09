@@ -429,6 +429,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ========== 啟動時自動從 GitHub 備份還原（若 DB 是空的）==========
+if "auto_restore_checked" not in st.session_state:
+    st.session_state["auto_restore_checked"] = True
+    try:
+        restored, restore_msg = db.auto_restore_on_startup()
+        if restored:
+            st.session_state["_startup_restored"] = True
+    except Exception:
+        pass
+
 # 系統頂部橫幅
 st.markdown("""
 <div class="main-header">
@@ -1668,89 +1678,101 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
 
         # 區塊 0: GitHub 雲端一鍵備份與還原
         st.markdown("##### ☁️ 0. GitHub 雲端一鍵備份與還原")
-        st.caption("將全系統資料（業務、情境、留言、交辦事項）推送至您的 GitHub 倉庫作為永久雲端備份，隨時可一鍵還原。")
-
-        # 取得上次同步資訊
-        last_push_time, last_push_summary = db.get_cloud_sync_meta() if hasattr(db, "get_cloud_sync_meta") else ("", "")
-        saved_pat = db.get_github_pat() if hasattr(db, "get_github_pat") else ""
-
-        # 同步狀態橫幅
-        if last_push_time:
-            st.markdown(f"""
-            <div style="background: linear-gradient(to right, #f0fdf4, #dcfce7); border: 1px solid #86efac; border-left: 5px solid #16a34a; border-radius: 8px; padding: 0.7rem 1.2rem; margin-bottom: 0.8rem; display:flex; justify-content:space-between; align-items:center;">
-                <div>
-                    <span style="font-weight:700; color:#15803d;">✅ 上次雲端同步成功</span>
-                    <span style="font-size:0.85rem; color:#16a34a; margin-left:0.5rem;">{last_push_summary}</span>
-                </div>
-                <span style="font-size:0.82rem; color:#4ade80; background:#166534; padding:2px 10px; border-radius:12px;">🕒 {last_push_time}</span>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.info("尚未執行雲端備份，請輸入 GitHub PAT 後點擊「☁️ 一鍵上傳至雲端」。")
-
-        col_cloud1, col_cloud2 = st.columns([3, 1])
-        with col_cloud1:
-            github_pat_input = st.text_input(
-                "GitHub 個人存取權杖 (Personal Access Token)",
-                value=saved_pat,
-                type="password",
-                placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxx",
-                help="請到 GitHub → Settings → Developer settings → Personal access tokens → 建立新 Token（勾選 repo 權限）"
-            )
-        with col_cloud2:
-            if st.button("💾 儲存 PAT 設定", use_container_width=True, key="save_pat_btn"):
-                if github_pat_input.strip():
-                    db.save_github_pat(github_pat_input.strip())
-                    set_flash_message("✅ GitHub PAT 已儲存！下次操作無需重新輸入。", icon="🔑")
-                    st.rerun()
+        st.caption("將全系統資料（業務、情境、留言、交辦事項）推送至 GitHub 倉庫作為永久雲端備份。伺服器重啟後會**自動從雲端還原**。")
 
         GITHUB_OWNER = "jerrylin119-maker"
         GITHUB_REPO = "civilian_force_dashboard"
 
+        # 從 GitHub 直接讀取備份資訊（不依賴 SQLite，重啟也不失效）
+        if "cloud_backup_info" not in st.session_state:
+            try:
+                _ok, _bobj, _err = db.fetch_backup_public(GITHUB_OWNER, GITHUB_REPO)
+                if _ok and _bobj:
+                    _task_cnt = len(_bobj.get("tasks", []))
+                    _at_cnt   = len(_bobj.get("assigned_tasks", []))
+                    _g_cnt    = len(_bobj.get("guides", []))
+                    _f_cnt    = len(_bobj.get("feedbacks", []))
+                    st.session_state["cloud_backup_info"] = {
+                        "time": _bobj.get("backup_created_at", "（時間不明）"),
+                        "summary": f"{_task_cnt} 筆業務 | {_g_cnt} 情境 | {_f_cnt} 留言 | {_at_cnt} 交辦事項"
+                    }
+                else:
+                    st.session_state["cloud_backup_info"] = None
+            except Exception:
+                st.session_state["cloud_backup_info"] = None
+
+        cloud_info = st.session_state.get("cloud_backup_info")
+
+        if cloud_info:
+            st.markdown(f"""
+            <div style="background: linear-gradient(to right, #f0fdf4, #dcfce7); border: 1px solid #86efac; border-left: 5px solid #16a34a; border-radius: 8px; padding: 0.7rem 1.2rem; margin-bottom: 0.8rem; display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <span style="font-weight:700; color:#15803d;">✅ 雲端備份就緒</span>
+                    <span style="font-size:0.85rem; color:#16a34a; margin-left:0.5rem;">{cloud_info['summary']}</span>
+                </div>
+                <span style="font-size:0.82rem; color:#fff; background:#16a34a; padding:3px 12px; border-radius:12px;">🕒 {cloud_info['time']}</span>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.info("🔍 尚未偵測到 GitHub 雲端備份，請先執行「☁️ 一鍵上傳至雲端備份」建立首次備份。")
+
+        # PAT 輸入（只有「上傳」才需要，還原不需要 PAT）
+        saved_pat = db.get_github_pat() if hasattr(db, "get_github_pat") else ""
+        col_cloud1, col_cloud2 = st.columns([3, 1])
+        with col_cloud1:
+            github_pat_input = st.text_input(
+                "GitHub PAT（上傳時才需要，還原不需要）",
+                value=saved_pat,
+                type="password",
+                placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxx",
+                help="GitHub → Settings → Developer settings → Personal access tokens → 建立 Token（勾選 repo 權限）"
+            )
+        with col_cloud2:
+            if st.button("💾 儲存 PAT", use_container_width=True, key="save_pat_btn"):
+                if github_pat_input.strip():
+                    db.save_github_pat(github_pat_input.strip())
+                    set_flash_message("✅ GitHub PAT 已儲存！", icon="🔑")
+                    st.rerun()
+
         col_push, col_restore = st.columns([1, 1])
         with col_push:
-            push_clicked = st.button("☁️ 一鍵上傳至雲端備份", type="primary", use_container_width=True, key="cloud_push_btn")
-            if push_clicked:
+            if st.button("☁️ 一鍵上傳至雲端備份", type="primary", use_container_width=True, key="cloud_push_btn"):
                 pat = github_pat_input.strip() or saved_pat
                 if not pat:
-                    st.error("請先輸入並儲存 GitHub PAT！")
+                    st.error("請先輸入並儲存 GitHub PAT（上傳才需要）！")
                 else:
-                    with st.spinner("正在將全系統資料打包並推送至 GitHub 雲端..."):
+                    with st.spinner("正在打包並推送至 GitHub 雲端..."):
                         ok, summary, err = db.push_full_backup_to_github(GITHUB_OWNER, GITHUB_REPO, pat)
                     if ok:
+                        # 清除快取，下次讀取最新資訊
+                        st.session_state.pop("cloud_backup_info", None)
                         set_flash_message(f"🎉 雲端備份成功！已上傳：{summary}", icon="☁️")
                         st.rerun()
                     else:
                         st.error(f"❌ 上傳失敗：{err}\n💡 請確認 PAT 正確且具有 repo 寫入權限。")
 
         with col_restore:
-            restore_clicked = st.button("🔄 從雲端還原上次備份", type="secondary", use_container_width=True, key="cloud_restore_btn")
-            if restore_clicked:
-                pat = github_pat_input.strip() or saved_pat
-                if not pat:
-                    st.error("請先輸入並儲存 GitHub PAT！")
-                elif not last_push_time:
-                    st.warning("尚未有雲端備份紀錄，請先執行「一鍵上傳至雲端備份」。")
-                else:
-                    if "cloud_restore_confirm" not in st.session_state:
-                        st.session_state["cloud_restore_confirm"] = True
-                        st.rerun()
+            if st.button("🔄 從雲端還原備份", type="secondary", use_container_width=True, key="cloud_restore_btn"):
+                st.session_state["cloud_restore_confirm"] = True
+                st.rerun()
 
         if st.session_state.get("cloud_restore_confirm"):
-            st.warning(f"⚠️ 確認要從雲端還原？這將覆蓋目前所有本機資料，還原至上次備份（{last_push_time}：{last_push_summary}）。")
+            bk_time = cloud_info["time"] if cloud_info else "（未知時間）"
+            bk_sum  = cloud_info["summary"] if cloud_info else ""
+            st.warning(f"⚠️ 確認從雲端還原？將覆蓋目前所有本機資料，還原至備份：{bk_time}（{bk_sum}）")
             col_cf1, col_cf2 = st.columns([1, 1])
             with col_cf1:
                 if st.button("✅ 確認還原", type="primary", use_container_width=True, key="confirm_restore_yes"):
-                    pat = github_pat_input.strip() or saved_pat
-                    with st.spinner("正在從 GitHub 拉取備份資料..."):
-                        ok, backup_obj, err = db.fetch_backup_from_github(GITHUB_OWNER, GITHUB_REPO, pat)
+                    with st.spinner("正在從 GitHub 拉取備份資料（免 PAT）..."):
+                        ok, backup_obj, err = db.fetch_backup_public(GITHUB_OWNER, GITHUB_REPO)
                     if ok:
                         ok2, msg2 = db.restore_from_github_backup(backup_obj)
                         st.session_state.pop("cloud_restore_confirm", None)
+                        st.session_state.pop("cloud_backup_info", None)
                         set_flash_message(f"🎉 雲端還原成功！{msg2}", icon="🔄")
                         st.rerun()
                     else:
-                        st.error(f"❌ 從雲端拉取備份失敗：{err}")
+                        st.error(f"❌ 從雲端拉取失敗：{err}")
                         st.session_state.pop("cloud_restore_confirm", None)
             with col_cf2:
                 if st.button("❌ 取消", use_container_width=True, key="confirm_restore_no"):
