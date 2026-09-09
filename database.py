@@ -1308,8 +1308,11 @@ def push_full_backup_to_github(owner, repo, pat, branch="main", backup_path="clo
 
     init_db()
     full_data = get_full_system_data()
-    # 加入交辦事項
-    assigned = get_all_assigned_tasks() if "get_all_assigned_tasks" in dir() else []
+    # 加入交辦事項（直接呼叫，同一模組內函式）
+    try:
+        assigned = get_all_assigned_tasks()
+    except Exception:
+        assigned = []
     full_data["assigned_tasks"] = assigned
     full_data["backup_created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
