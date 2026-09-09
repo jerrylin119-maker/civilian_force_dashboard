@@ -359,6 +359,18 @@ def init_db(force_reseed=False):
     """)
 
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS AssignedTasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_content TEXT NOT NULL,
+            deadline_note TEXT,
+            is_done INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS FeedbackDatabase (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             unit_name TEXT NOT NULL,
@@ -1199,3 +1211,59 @@ def get_top_latest_highlights(limit=3):
         reverse=True
     )
     return sorted_tasks[:limit]
+
+def get_all_assigned_tasks():
+    """取得所有民力科近期交辦協助事項 (依排序與建立時間)"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, item_content, deadline_note, is_done, sort_order, created_at, updated_at
+        FROM AssignedTasks
+        ORDER BY is_done ASC, sort_order ASC, id ASC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def add_assigned_task(item_content, deadline_note="", sort_order=0):
+    """新增一筆交辦事項"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("""
+        INSERT INTO AssignedTasks (item_content, deadline_note, is_done, sort_order, created_at, updated_at)
+        VALUES (?, ?, 0, ?, ?, ?)
+    """, (item_content.strip(), deadline_note.strip(), sort_order, now_str, now_str))
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return new_id
+
+def update_assigned_task(task_id, item_content, deadline_note, is_done, sort_order=0):
+    """更新一筆交辦事項"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("""
+        UPDATE AssignedTasks SET
+            item_content = ?,
+            deadline_note = ?,
+            is_done = ?,
+            sort_order = ?,
+            updated_at = ?
+        WHERE id = ?
+    """, (item_content.strip(), deadline_note.strip(), 1 if is_done else 0, sort_order, now_str, task_id))
+    conn.commit()
+    conn.close()
+
+def delete_assigned_task(task_id):
+    """刪除一筆交辦事項"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM AssignedTasks WHERE id = ?", (task_id,))
+    conn.commit()
+    conn.close()

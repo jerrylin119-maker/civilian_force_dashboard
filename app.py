@@ -569,6 +569,47 @@ with st.sidebar:
     )
 
 
+
+# ==================== 📋 民力科近期交辦協助事項 (公告欄) ====================
+assigned_items = db.get_all_assigned_tasks() if hasattr(db, "get_all_assigned_tasks") else []
+pending_items = [t for t in assigned_items if not t["is_done"]]
+done_items = [t for t in assigned_items if t["is_done"]]
+
+if assigned_items:
+    st.markdown("""
+    <div style="background: linear-gradient(to right, #f0f9ff, #e0f2fe); border: 1px solid #bae6fd; border-left: 6px solid #0284c7; border-radius: 10px; padding: 0.8rem 1.3rem; margin-bottom: 0.5rem;">
+        <span style="font-size: 1.1rem; font-weight: 700; color: #0c4a6e;">📋 民力科近期交辦協助事項</span>
+        <span style="font-size: 0.82rem; color: #0369a1; margin-left: 0.8rem;">各外勤大隊、分隊請依下列項目確認辦理並於期限前回覆</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if pending_items:
+        for at in pending_items:
+            dl_badge = ""
+            if at.get("deadline_note") and at["deadline_note"].strip():
+                dl_badge = f'<span style="background:#fef3c7; color:#92400e; font-size:0.8rem; font-weight:700; padding:2px 8px; border-radius:4px; margin-left:0.6rem; border:1px solid #fde68a;">⏰ {at["deadline_note"]}</span>'
+            st.markdown(f"""
+            <div style="display:flex; align-items:center; padding: 0.55rem 1rem; margin-bottom:0.3rem; background:#fff; border:1px solid #e0f2fe; border-radius:7px; border-left:4px solid #0284c7;">
+                <span style="font-size:1.1rem; margin-right:0.5rem;">🔵</span>
+                <span style="font-size:0.97rem; color:#1e293b; font-weight:600; flex:1;">{at["item_content"]}</span>
+                {dl_badge}
+            </div>
+            """, unsafe_allow_html=True)
+    
+    if done_items:
+        with st.expander(f"✅ 已完成項目（{len(done_items)} 項）", expanded=False):
+            for at in done_items:
+                st.markdown(f"""
+                <div style="display:flex; align-items:center; padding:0.45rem 1rem; margin-bottom:0.25rem; background:#f8fafc; border:1px solid #e2e8f0; border-radius:7px; opacity:0.65;">
+                    <span style="font-size:1rem; margin-right:0.5rem;">✅</span>
+                    <span style="font-size:0.92rem; color:#64748b; text-decoration:line-through; flex:1;">{at["item_content"]}</span>
+                    <span style="font-size:0.8rem; color:#94a3b8; margin-left:0.5rem;">{at.get("deadline_note", "")}</span>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+
+
 # 全域 KPI 統計指標
 stats = db.get_summary_stats()
 col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
@@ -1258,13 +1299,14 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
     st.markdown("### ⚙️ 科內承辦人線上快速維護介面")
     st.info("💡 承辦人可直接在此處編輯各業務內容（自動連動首頁導航）、線上修改「專業義消承辦人」四大情境說明，或管理/回覆/刪除「我有話要說」同仁留言。所有儲存操作均具備明確完成提示。")
 
-    subtab1, subtab2, subtab3, subtab4, subtab5, subtab6 = st.tabs([
+    subtab1, subtab2, subtab3, subtab4, subtab5, subtab6, subtab7 = st.tabs([
         "📋 Excel 式線上即時編輯",
         "🎖️ 專業義消承辦人 - 導引維護",
         "💬 我有話要說 - 線上回覆與留言管理",
         "➕ 新增業務項目",
         "✏️ 單筆詳細維護 / 刪除",
-        "💾 資料庫備份、還原與重設"
+        "💾 資料庫備份、還原與重設",
+        "📋 交辦協助事項管理"
     ])
 
     # 子分頁 1: st.data_editor 批次編輯
@@ -1754,3 +1796,53 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                 db.init_db(force_reseed=True)
                 set_flash_message("🎉 資料庫已成功重設為臺東縣消防局官方標準業務清單與預設資料！", icon="🔄")
                 st.rerun()
+
+    # 子分頁 7: 民力科近期交辦協助事項管理
+    with subtab7:
+        st.markdown("#### 📋 民力科近期交辦協助事項管理")
+        st.caption("在此新增、修改或勾選完成「民力科近期交辦協助事項」，各分頁頂部的公告欄將即時同步顯示給所有外勤大隊同仁查閱。")
+
+        # 新增交辦事項表單
+        with st.form("add_assigned_task_form", clear_on_submit=True):
+            col_at1, col_at2, col_at3 = st.columns([5, 3, 1])
+            with col_at1:
+                new_at_content = st.text_input("交辦事項內容 *", placeholder="例如：請各大隊確認義消出勤費名冊後回傳科內")
+            with col_at2:
+                new_at_deadline = st.text_input("期限重點", placeholder="例如：9/30（三）前回傳")
+            with col_at3:
+                new_at_sort = st.number_input("排序", min_value=0, max_value=99, value=0, step=1)
+            btn_add_at = st.form_submit_button("➕ 新增交辦事項", type="primary", use_container_width=True)
+            if btn_add_at:
+                if not new_at_content.strip():
+                    st.error("請輸入交辦事項內容！")
+                else:
+                    new_at_id = db.add_assigned_task(new_at_content, new_at_deadline, new_at_sort)
+                    set_flash_message(f"🎉 成功新增交辦事項！公告欄已即時更新。", icon="📋")
+                    st.rerun()
+
+        st.markdown("---")
+        st.markdown("##### 📝 現有交辦事項清單（可直接修改、勾選完成或刪除）")
+
+        all_at = db.get_all_assigned_tasks() if hasattr(db, "get_all_assigned_tasks") else []
+        if not all_at:
+            st.info("目前尚未新增任何交辦事項，請使用上方表單新增。")
+        else:
+            for at_item in all_at:
+                col_a1, col_a2, col_a3, col_a4, col_a5 = st.columns([0.5, 4, 2.5, 0.7, 0.7])
+                with col_a1:
+                    at_done = st.checkbox("", value=bool(at_item["is_done"]), key=f"at_done_{at_item['id']}", label_visibility="collapsed")
+                with col_a2:
+                    at_content = st.text_input("內容", value=at_item["item_content"], key=f"at_content_{at_item['id']}", label_visibility="collapsed")
+                with col_a3:
+                    at_deadline = st.text_input("期限重點", value=at_item["deadline_note"] or "", key=f"at_deadline_{at_item['id']}", label_visibility="collapsed")
+                with col_a4:
+                    if st.button("💾", key=f"at_save_{at_item['id']}", use_container_width=True, help="儲存此列修改"):
+                        db.update_assigned_task(at_item["id"], at_content, at_deadline, at_done, at_item["sort_order"])
+                        set_flash_message(f"✅ 已更新交辦事項！公告欄即時同步。", icon="📋")
+                        st.rerun()
+                with col_a5:
+                    if st.button("🗑️", key=f"at_del_{at_item['id']}", use_container_width=True, help="永久刪除此項"):
+                        db.delete_assigned_task(at_item["id"])
+                        set_flash_message(f"🗑️ 已刪除該交辦事項。", icon="🗑️")
+                        st.rerun()
+
