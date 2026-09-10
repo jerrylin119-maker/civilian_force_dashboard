@@ -1720,7 +1720,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
         with col_restore:
             if st.button("🔄 從雲端還原備份", type="secondary", use_container_width=True, key="cloud_restore_btn"):
                 st.session_state["cloud_restore_confirm"] = True
-                st.rerun()
+                # 不需要 st.rerun()，Streamlit 按鈕點擊後會自動重跑，確認框會直接出現在下方
 
         if st.session_state.get("cloud_restore_confirm"):
             bk_time = cloud_info["time"] if cloud_info else "（未知時間）"
@@ -1743,7 +1743,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
             with col_cf2:
                 if st.button("❌ 取消", use_container_width=True, key="confirm_restore_no"):
                     st.session_state.pop("cloud_restore_confirm", None)
-                    st.rerun()
+                    # 不需要 st.rerun()，自動重繪即可
 
 
         # 區塊 2: 全系統多資料表完整匯出
