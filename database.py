@@ -1314,7 +1314,9 @@ def push_full_backup_to_github(owner, repo, pat, branch="main", backup_path="clo
     except Exception:
         assigned = []
     full_data["assigned_tasks"] = assigned
-    full_data["backup_created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    from datetime import timezone, timedelta
+    tw_tz = timezone(timedelta(hours=8))
+    full_data["backup_created_at"] = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S (台灣時間)")
 
     json_content = py_json.dumps(full_data, ensure_ascii=False, indent=2)
     content_b64 = base64.b64encode(json_content.encode("utf-8")).decode("ascii")
@@ -1339,8 +1341,8 @@ def push_full_backup_to_github(owner, repo, pat, branch="main", backup_path="clo
 
     task_cnt = len(full_data.get("tasks", []))
     summary = f"{task_cnt} 筆業務 | {len(full_data.get('guides', []))} 情境 | {len(full_data.get('feedbacks', []))} 留言 | {len(assigned)} 交辦事項"
-    push_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    commit_msg = f"chore: 自動備份民力訓練科業務資料 ({push_time})"
+    push_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
+    commit_msg = f"chore: 自動備份民力訓練科業務資料 ({push_time} 台灣時間)"
 
     payload = {
         "message": commit_msg,

@@ -1638,43 +1638,9 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                         set_flash_message(f"✅ 已永久刪除 ID #{selected_id}【{current_item['title']}】！", msg_type="warning", icon="🗑️")
                         st.rerun()
 
-    # 子分頁 6: 資料庫完整匯出、Google 試算表雲端連動與還原
+    # 子分頁 6: 資料庫備份、雲端同步與還原
     with subtab6:
-        st.markdown("#### 💾 資料庫完整匯出、Google 試算表連動與備份還原")
-        st.info("💡 **資料永續與多人協作方案**：您可以隨時將全系統所有資料表打包匯出，或直接綁定 **Google 試算表 (Google Sheets)**，科內承辦人只需在 Google 試算表填寫更新，看板點擊按鈕即可 1 秒同步！")
-
-        # 區塊 1: Google 試算表 (Google Sheets) 雲端連動
-        st.markdown("##### 🌐 1. 綁定 Google 試算表 (Google Sheets) 即時雲端連動")
-        saved_gsheet_url, last_sync_time = db.get_gsheet_sync_info()
-        
-        with st.form("gsheet_sync_form"):
-            st.caption("請將科內 Google 試算表的共用權限設為「**知道連結的使用者均可檢視**」，並將試算表網址貼在下方：")
-            input_gsheet_url = st.text_input(
-                "Google 試算表網址 (Google Sheets URL)",
-                value=saved_gsheet_url,
-                placeholder="例如：https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
-            )
-            col_gs1, col_gs2 = st.columns([1, 1])
-            with col_gs1:
-                btn_sync_now = st.form_submit_button("🔄 立即從 Google 試算表同步業務資料", type="primary", use_container_width=True)
-            with col_gs2:
-                st.caption(f"🕒 前次雲端同步時間：**{last_sync_time}**")
-
-            if btn_sync_now:
-                if not input_gsheet_url.strip():
-                    st.error("請輸入 Google 試算表網址！")
-                else:
-                    success, s_count, s_msg = db.sync_tasks_from_google_sheet(input_gsheet_url)
-                    if success:
-                        set_flash_message(f"🎉 成功同步！已從 Google 試算表匯入 {s_count} 筆最新業務資料，看板已即時更新。", icon="🌐")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ {s_msg}")
-
-        st.markdown("---")
-
-
-        st.markdown("---")
+        st.markdown("#### 💾 資料庫備份、GitHub 雲端同步與還原")
 
         # 區塊 0: GitHub 雲端一鍵備份與還原
         st.markdown("##### ☁️ 0. GitHub 雲端一鍵備份與還原")
