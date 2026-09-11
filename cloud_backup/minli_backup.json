@@ -139,10 +139,10 @@
       "title": "鳳凰數位學習網管理與時數認證",
       "owner": "尤仁宏秘書",
       "status": "常態辦理",
-      "update_highlight": "★ 鳳凰數位學習網專屬入口已建立，請同仁依規定登入並完成年度必修課程時數。",
-      "content_detail": "### 鳳凰數位學習網使用說明\n- **平台連結**：[消防署鳳凰數位學習網入口](https://sites.google.com/d/1KSikFOmeqiEngtUdU7ilsc2XOl6tuUkn/p/1DvhmzmB8E9JfwT5qALznUaHlGJMJkHsn/edit)\n- 各單位請督導所屬義消人員於規定期限前完成線上課程學習與測驗認證。",
-      "doc_links": "鳳凰數位學習網入口: https://sites.google.com/d/1KSikFOmeqiEngtUdU7ilsc2XOl6tuUkn/p/1DvhmzmB8E9JfwT5qALznUaHlGJMJkHsn/edit",
-      "last_updated": "2026/8/28 08:00"
+      "update_highlight": "本局鳳凰數位學習網專屬入口已建立，請同仁依規定登入並完成年度必修課程時數。\n另外也新增加了台東鳳凰數位雲端學院，提供同仁可以隨時複習課程",
+      "content_detail": "鳳凰數位學習網使用說明\n- **平台連結**：[台東消防局鳳凰數位學習網入口]\nhttps://www.ttfd.gov.tw/Employee/index.php\n- 請各單位人員於規定期限前完成線上課程學習與測驗認證。\n台東鳳凰數位雲端學院: https://sites.google.com/d/1KSikFOmeqiEngtUdU7ilsc2XOl6tuUkn/p/1DvhmzmB8E9JfwT5qALznUaHlGJMJkHsn/edit",
+      "doc_links": "鳳凰數位學習網入口 https://www.ttfd.gov.tw/Employee/index.php\n台東鳳凰數位雲端學院: https://sites.google.com/d/1KSikFOmeqiEngtUdU7ilsc2XOl6tuUkn/p/1DvhmzmB8E9JfwT5qALznUaHlGJMJkHsn/edit",
+      "last_updated": "2026-09-11 00:48:32"
     }
   ],
   "guides": [
@@ -197,7 +197,7 @@
       "replied_at": "2026-08-30 11:00:00"
     }
   ],
-  "export_time": "2026-09-10 16:00:32",
+  "export_time": "2026-09-11 00:48:50",
   "organization": "臺東縣消防局民力訓練科",
   "assigned_tasks": [
     {
@@ -219,5 +219,5 @@
       "updated_at": "2026-09-09 14:52:41"
     }
   ],
-  "backup_created_at": "2026-09-11 00:00:32 (台灣時間)"
+  "backup_created_at": "2026-09-11 08:48:50 (台灣時間)"
 }
