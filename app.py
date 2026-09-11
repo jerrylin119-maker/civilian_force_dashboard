@@ -1718,32 +1718,29 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                         st.error(f"❌ 上傳失敗：{err}\n💡 請確認 PAT 正確且具有 repo 寫入權限。")
 
         with col_restore:
-            if st.button("🔄 從雲端還原備份", type="secondary", use_container_width=True, key="cloud_restore_btn"):
-                st.session_state["cloud_restore_confirm"] = True
-                # 不需要 st.rerun()，Streamlit 按鈕點擊後會自動重跑，確認框會直接出現在下方
-
-        if st.session_state.get("cloud_restore_confirm"):
-            bk_time = cloud_info["time"] if cloud_info else "（未知時間）"
-            bk_sum  = cloud_info["summary"] if cloud_info else ""
-            st.warning(f"⚠️ 確認從雲端還原？將覆蓋目前所有本機資料，還原至備份：{bk_time}（{bk_sum}）")
-            col_cf1, col_cf2 = st.columns([1, 1])
-            with col_cf1:
-                if st.button("✅ 確認還原", type="primary", use_container_width=True, key="confirm_restore_yes"):
-                    with st.spinner("正在從 GitHub 拉取備份資料（免 PAT）..."):
-                        ok, backup_obj, err = db.fetch_backup_public(GITHUB_OWNER, GITHUB_REPO)
-                    if ok:
-                        ok2, msg2 = db.restore_from_github_backup(backup_obj)
-                        st.session_state.pop("cloud_restore_confirm", None)
-                        st.session_state.pop("cloud_backup_info", None)
-                        set_flash_message(f"🎉 雲端還原成功！{msg2}", icon="🔄")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ 從雲端拉取失敗：{err}")
-                        st.session_state.pop("cloud_restore_confirm", None)
-            with col_cf2:
-                if st.button("❌ 取消", use_container_width=True, key="confirm_restore_no"):
-                    st.session_state.pop("cloud_restore_confirm", None)
-                    # 不需要 st.rerun()，自動重繪即可
+            restore_checked = st.checkbox(
+                "⚠️ 勾選此處確認要還原（將覆蓋本機資料）",
+                key="restore_confirm_check"
+            )
+            restore_btn_clicked = st.button(
+                "🔄 從雲端還原備份",
+                type="secondary",
+                use_container_width=True,
+                key="cloud_restore_btn",
+                disabled=not restore_checked,
+                help="請先勾選上方確認框，再按此鈕執行還原"
+            )
+            if restore_btn_clicked and restore_checked:
+                bk_time = cloud_info["time"] if cloud_info else "（未知時間）"
+                with st.spinner(f"正在從 GitHub 拉取備份（{bk_time}）..."):
+                    ok, backup_obj, err = db.fetch_backup_public(GITHUB_OWNER, GITHUB_REPO)
+                if ok:
+                    ok2, msg2 = db.restore_from_github_backup(backup_obj)
+                    st.session_state.pop("cloud_backup_info", None)
+                    set_flash_message(f"🎉 雲端還原成功！{msg2}", icon="🔄")
+                    st.rerun()
+                else:
+                    st.error(f"❌ 從雲端拉取失敗：{err}")
 
 
         # 區塊 2: 全系統多資料表完整匯出
