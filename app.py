@@ -1338,7 +1338,11 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
     st.markdown("### ⚙️ 科內承辦人線上快速維護介面")
     st.info("💡 承辦人可直接在此處編輯各業務內容（自動連動首頁導航）、線上修改「專業義消承辦人」四大情境說明，或管理/回覆/刪除「我有話要說」同仁留言。所有儲存操作均具備明確完成提示。")
 
-    subtab1, subtab2, subtab3, subtab4, subtab5, subtab6, subtab7 = st.tabs([
+    # ⚠️ 這裡改用 session_state 綁定的 st.radio 而非 st.tabs：
+    # st.tabs 沒有 key 參數、選中的分頁不會保存在 session_state，只要頁面因為任何其他元件
+    # （例如子分頁6「勾選確認還原」的 checkbox）觸發 rerun，畫面就會被重置跳回第一個分頁，
+    # 使用者會覺得「勾選後就跳出去了」。改用 st.radio(key=...) 才能讓選到的子分頁在 rerun 後維持不變。
+    maintenance_subtabs = [
         "📋 Excel 式線上即時編輯",
         "🎖️ 專業義消承辦人 - 導引維護",
         "💬 我有話要說 - 線上回覆與留言管理",
@@ -1346,10 +1350,19 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
         "✏️ 單筆詳細維護 / 刪除",
         "💾 資料庫備份、還原與重設",
         "📋 交辦協助事項管理"
-    ])
+    ]
+    if "maintenance_subtab" not in st.session_state or st.session_state["maintenance_subtab"] not in maintenance_subtabs:
+        st.session_state["maintenance_subtab"] = maintenance_subtabs[0]
+    selected_subtab = st.radio(
+        "維護子分頁",
+        maintenance_subtabs,
+        key="maintenance_subtab",
+        horizontal=True,
+        label_visibility="collapsed"
+    )
 
     # 子分頁 1: st.data_editor 批次編輯
-    with subtab1:
+    if selected_subtab == maintenance_subtabs[0]:
         st.markdown("#### 📋 批次表格編輯器 (`st.data_editor`)")
         st.caption("可雙擊任一儲存格修改文字、承辦人、狀態或最新異動重點，修改完成後請點擊下方「💾 儲存所有表格修改」按鈕寫入資料庫。（※ 於此修改的業務內容會自動同步連動首頁「專業義消承辦人」中的對應 SOP 與連結！）")
         
@@ -1385,7 +1398,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                 st.rerun()
 
     # 子分頁 2: 專業義消承辦人情境導引維護
-    with subtab2:
+    elif selected_subtab == maintenance_subtabs[1]:
         st.markdown("#### 🎖️ 「專業義消承辦人」四大情境說明與關聯業務維護")
         st.caption("您可以在此自由修改第一大項各情境的標題、圖示、情境說明文字，以及要附加顯示哪幾項業務的 SOP！")
         
@@ -1434,7 +1447,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                 st.rerun()
 
     # 子分頁 3: 回覆我有話要說留言 & 留言管理
-    with subtab3:
+    elif selected_subtab == maintenance_subtabs[2]:
         st.markdown("#### 💬 我有話要說 — 同仁留言官方回覆與留言管理")
         all_fbs = db.get_all_feedbacks()
         
@@ -1496,7 +1509,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                     st.rerun()
 
     # 子分頁 4: 新增業務項目
-    with subtab4:
+    elif selected_subtab == maintenance_subtabs[3]:
         st.markdown("#### ➕ 新增業務項目表單")
         st.caption("承辦人可直接使用下拉選單快速指派，並支援加入 Google 雲端硬碟附件下載連結與流程圖檔。")
         
@@ -1562,7 +1575,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                     st.rerun()
 
     # 子分頁 5: 單筆詳細編輯與刪除
-    with subtab5:
+    elif selected_subtab == maintenance_subtabs[4]:
         st.markdown("#### ✏️ 單筆業務詳細編輯與刪除")
         st.caption("您可以先透過「業務分類篩選」快速縮小清單範圍，再選取特定項目進行詳細內容或 SOP 修改。切換項目時下方欄位將即時自動同步載入最新內容！")
         
@@ -1673,7 +1686,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                         st.rerun()
 
     # 子分頁 6: 資料庫備份、雲端同步與還原
-    with subtab6:
+    elif selected_subtab == maintenance_subtabs[5]:
         st.markdown("#### 💾 資料庫備份、GitHub 雲端同步與還原")
 
         # 區塊 0: GitHub 雲端一鍵備份與還原
@@ -1912,7 +1925,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                 st.rerun()
 
     # 子分頁 7: 民力科近期交辦協助事項管理
-    with subtab7:
+    elif selected_subtab == maintenance_subtabs[6]:
         st.markdown("#### 📋 民力科近期交辦協助事項管理")
         st.caption("在此新增、修改或勾選完成「民力科近期交辦協助事項」，各分頁頂部的公告欄將即時同步顯示給所有外勤大隊同仁查閱。")
 
