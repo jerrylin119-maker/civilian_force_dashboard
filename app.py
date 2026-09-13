@@ -843,8 +843,17 @@ def format_sop_content_smart(text):
         
     if tsv_buffer:
         new_lines.extend(flush_tsv(tsv_buffer))
-        
-    return "\n".join(new_lines)
+
+    # Markdown 規則是「單一換行不會換行、要連續兩個換行才會分段」，
+    # 但貼上的公文/SOP 內容通常每一行（例如 一、二、三、...）都是各自獨立的一行，
+    # 只用單一 \n 組合的話，在 st.markdown 渲染時會被擠成同一段、變成使用者看到的「全部黏在一起」。
+    # 因此除了真正的空白行（維持真正的分段效果）之外，每一行結尾補上 Markdown 的「強制換行」
+    # 語法（兩個半形空白 + 換行），讓每一行都能各自換行顯示，同時不會因為分段而產生過大的段落間距。
+    processed_lines = [
+        ln if (ln == "" or ln.endswith("  ")) else f"{ln}  "
+        for ln in new_lines
+    ]
+    return "\n".join(processed_lines)
 
 
 # 輔助函式：將 Google Drive 連結轉換為可直連檢視的圖片網址
