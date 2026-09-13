@@ -2,6 +2,7 @@ import json
 # -*- coding: utf-8 -*-
 
 
+import html
 import streamlit as st
 import pandas as pd
 import re
@@ -108,6 +109,22 @@ if "selected_sidebar_owner" not in st.session_state:
     st.session_state["selected_sidebar_owner"] = "全部承辦人"
 if "search_query" not in st.session_state:
     st.session_state["search_query"] = ""
+
+def get_valid_admin_passwords():
+    """取得科內維護模式的合法密碼集合。
+
+    優先讀取 Streamlit Secrets（App → Settings → Secrets 設定 admin_password = "..."），
+    如尚未設定則回退為舊版預設密碼，避免尚未設定 Secrets 的環境（如本機開發）直接無法登入。
+    正式環境請務必盡快設定 admin_password，換掉這裡的預設弱密碼。
+    """
+    try:
+        configured = st.secrets.get("admin_password")
+    except Exception:
+        configured = None
+    if configured:
+        return {str(configured).strip()}
+    return {"119", "admin119", "minli119"}
+
 
 def set_flash_message(text, msg_type="success", icon="💾"):
     """設定跨頁持久通知訊息並觸發右下角 Toast 提示"""
@@ -547,9 +564,15 @@ with st.sidebar:
     # 3. 科內維護模式（管理員登入）
     st.subheader("🔐 科內維護模式")
     if not st.session_state["is_admin"]:
-        admin_pass = st.text_input("請輸入管理密碼", type="password", help="預設科內維護密碼為：119")
+        try:
+            _using_default_pw = not st.secrets.get("admin_password")
+        except Exception:
+            _using_default_pw = True
+        if _using_default_pw:
+            st.caption("⚠️ 尚未於 Streamlit Cloud 設定自訂管理密碼，目前為預設密碼，建議盡快至 App → Settings → Secrets 新增 `admin_password` 設定值。")
+        admin_pass = st.text_input("請輸入管理密碼", type="password", help="尚未設定自訂密碼前，預設科內維護密碼為：119")
         if st.button("🔓 啟用線上維護模式", use_container_width=True):
-            if admin_pass in ["119", "admin119", "minli119"]:
+            if admin_pass and admin_pass in get_valid_admin_passwords():
                 st.session_state["is_admin"] = True
                 st.session_state["top_main_nav"] = "⚙️ 科內線上維護 (Excel介面)"
                 st.session_state["active_tab"] = "⚙️ 科內線上維護 (Excel介面)"
@@ -1267,21 +1290,27 @@ elif selected_tab == "💬 我有話要說":
 
             for fb in feedbacks:
                 bg_c, text_c, status_txt = status_style_map.get(fb["status"], ("#f1f5f9", "#475569", fb["status"]))
-                
+
+                # 使用者自填欄位（單位/類別為下拉選單可信任，但姓名、內容、回覆為自由輸入文字，
+                # 必須先跳脫 HTML 特殊字元再塞入頁面，避免被拿來注入 <script> 等惡意內容 (XSS)）
+                safe_submitter = html.escape(fb['submitter']) if fb['submitter'] else ''
+                safe_content = html.escape(fb['content'] or '').replace('\n', '<br>')
+                safe_admin_reply = html.escape(fb['admin_reply'] or '').replace('\n', '<br>')
+
                 st.markdown(f"""
                 <div class="feedback-card">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
                         <div>
                             <span style="background:#ede9fe; color:#5b21b6; font-weight:700; padding:2px 8px; border-radius:4px; font-size:0.8rem;">{fb['category']}</span>
                             <strong style="margin-left:0.5rem; font-size:1rem; color:#1e293b;">🏢 {fb['unit_name']}</strong>
-                            <span style="color:#64748b; font-size:0.85rem; margin-left:0.4rem;">({fb['submitter'] or '熱心同仁'})</span>
+                            <span style="color:#64748b; font-size:0.85rem; margin-left:0.4rem;">({safe_submitter or '熱心同仁'})</span>
                         </div>
                         <div>
                             <span style="background:{bg_c}; color:{text_c}; padding:2px 8px; border-radius:9999px; font-size:0.78rem; font-weight:700;">{status_txt}</span>
                         </div>
                     </div>
                     <div style="font-size:0.95rem; color:#334155; line-height:1.5; margin-bottom:0.4rem;">
-                        💬 <strong>反映內容</strong>：{fb['content']}
+                        💬 <strong>反映內容</strong>：{safe_content}
                     </div>
                     <div style="font-size:0.8rem; color:#94a3b8; text-align:right;">
                         🕒 提報時間：{fb['created_at']}
@@ -1293,7 +1322,7 @@ elif selected_tab == "💬 我有話要說":
                     st.markdown(f"""
                     <div class="feedback-reply-box" style="margin-top:-0.6rem; margin-bottom:1.2rem;">
                         <strong>📢 民力訓練科回覆 ({fb['replied_at'] or ''})：</strong><br>
-                        {fb['admin_reply']}
+                        {safe_admin_reply}
                     </div>
                     """, unsafe_allow_html=True)
                 else:
@@ -1427,15 +1456,20 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
             sel_fb_id = fb_options[sel_fb_label]
             cur_fb = next(f for f in all_fbs if f["id"] == sel_fb_id)
 
+            # 同上：提報人自由輸入欄位先跳脫 HTML，避免管理者查看留言時觸發 XSS
+            safe_cur_submitter = html.escape(cur_fb['submitter']) if cur_fb['submitter'] else ''
+            safe_cur_contact = html.escape(cur_fb['contact_info']) if cur_fb['contact_info'] else '無'
+            safe_cur_content = html.escape(cur_fb['content'] or '').replace('\n', '<br>')
+
             st.markdown(f"""
             <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:1rem; margin-bottom:1rem;">
                 <strong>留言編號</strong>：ID #{cur_fb['id']}<br>
-                <strong>提報單位</strong>：{cur_fb['unit_name']} ({cur_fb['submitter']})<br>
+                <strong>提報單位</strong>：{cur_fb['unit_name']} ({safe_cur_submitter})<br>
                 <strong>業務類別</strong>：{cur_fb['category']}<br>
-                <strong>聯絡方式</strong>：{cur_fb['contact_info'] or '無'}<br>
+                <strong>聯絡方式</strong>：{safe_cur_contact}<br>
                 <strong>反映時間</strong>：{cur_fb['created_at']}<br>
                 <div style="margin-top:0.5rem; color:#1e293b;">
-                    <strong>💬 反映內容</strong>：{cur_fb['content']}
+                    <strong>💬 反映內容</strong>：{safe_cur_content}
                 </div>
             </div>
             """, unsafe_allow_html=True)
