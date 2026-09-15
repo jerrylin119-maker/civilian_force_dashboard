@@ -1,0 +1,28 @@
+name: Keep Streamlit App Awake
+
+# 每天自動用無頭瀏覽器造訪一次看板網址，避免 Streamlit Community Cloud
+# 因為連續多天無人瀏覽而自動休眠。也可以到 GitHub 的 Actions 分頁手動點擊執行。
+on:
+  schedule:
+    - cron: "0 1 * * *" # 每天 UTC 01:00（台灣時間 09:00）
+  workflow_dispatch: {}
+
+jobs:
+  keep-awake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: 造訪看板網址喚醒 App
+        run: python .github/scripts/keep_awake.py
