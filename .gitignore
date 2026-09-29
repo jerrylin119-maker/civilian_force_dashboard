@@ -25,3 +25,6 @@ desktop.ini
 *.log
 *.tmp
 scratch/
+
+# 每日休眠監控報告腳本產生的暫存檔（由 CI 重新產生，不需要進版控）
+sleep_report.md
