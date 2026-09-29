@@ -1,10 +1,13 @@
 name: Keep Streamlit App Awake
 
-# 每天自動用無頭瀏覽器造訪一次看板網址，避免 Streamlit Community Cloud
-# 因為連續多天無人瀏覽而自動休眠。也可以到 GitHub 的 Actions 分頁手動點擊執行。
+# 用無頭瀏覽器定期造訪看板網址，避免 Streamlit Community Cloud 休眠。
+# 實測這個 App 的休眠門檻遠短於官方文件說的「7 天無人瀏覽」，
+# 因此改成每 15 分鐘檢查一次（公開 repo 的 GitHub Actions 分鐘數完全免費，
+# 不會產生費用），確保中間不會有空窗期被真人使用者撞見休眠畫面。
+# 也可以到 GitHub 的 Actions 分頁手動點擊執行。
 on:
   schedule:
-    - cron: "0 1 * * *" # 每天 UTC 01:00（台灣時間 09:00）
+    - cron: "*/15 * * * *" # 每 15 分鐘一次
   workflow_dispatch: {}
 
 jobs:
@@ -19,10 +22,23 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Playwright
-        run: |
-          pip install playwright
-          playwright install --with-deps chromium
+      - name: Install Playwright (Python 套件)
+        run: pip install playwright
+
+      - name: 快取 Chromium 瀏覽器（避免每次執行都重新下載）
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('.github/workflows/keep-awake.yml') }}
+
+      - name: Install Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: playwright install --with-deps chromium
+
+      - name: Install Chromium 系統相依套件（有快取時仍需要）
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: playwright install-deps chromium
 
       - name: 造訪看板網址喚醒 App
         run: python .github/scripts/keep_awake.py
