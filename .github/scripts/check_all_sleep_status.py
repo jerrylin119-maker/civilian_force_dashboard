@@ -96,6 +96,16 @@ def main() -> int:
     report = "\n".join(lines)
     print("\n--- 報告內容 ---\n" + report)
 
+    # 同時寫到 status/ 目錄（會被 workflow commit 回 repo）：這是刻意設計成可以被
+    # 「git clone」讀取的持久化檔案，讓另一個雲端排程即使連不到一般外部網站/GitHub API
+    # （這個雲端環境的網路政策會擋住這些），也能透過 git clone 這條被允許的管道讀到最新報告，
+    # 進而把結果轉成一則真正的推播通知。
+    import os
+
+    os.makedirs("status", exist_ok=True)
+    with open("status/latest_sleep_report.md", "w", encoding="utf-8") as f:
+        f.write(report)
+
     with open("sleep_report.md", "w", encoding="utf-8") as f:
         f.write(report)
 

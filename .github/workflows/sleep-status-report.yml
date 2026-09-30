@@ -3,15 +3,18 @@ name: Daily Sleep Status Report
 # 每天檢查使用者所有部署的 Streamlit Community Cloud App（civilian_force_dashboard、
 # civil-force-dashboard、vocab700-app、ttfd-scholarship、fire_safety_training）
 # 目前是否處於休眠狀態，純唯讀監控，不會點擊喚醒按鈕、不會修改任何 App。
-# 結果會發布成這個 repo 裡「🔍 每日 App 休眠監控報告」這則 Issue 的留言，
-# 方便隨時回顧歷史紀錄，也會依你的 GitHub 通知設定收到信件提醒。
+# 結果會發布成這個 repo 裡「🔍 每日 App 休眠監控報告」這則 Issue 的留言（方便回顧歷史紀錄，
+# 也會依 GitHub 通知設定收到信件提醒），同時把結果 commit 成 status/latest_sleep_report.md，
+# 供另一個雲端排程（透過 git clone 讀取，繞過一般網頁擷取會被擋的網路政策）轉發成推播通知。
+# 執行時間對齊使用者的「Jerry 早晨綜合報告」（08:00 台北時間），讓兩則通知差不多同時抵達。
 on:
   schedule:
-    - cron: "0 1 * * *" # 每天 UTC 01:00（台灣時間 09:00）
+    - cron: "0 0 * * *" # 每天 UTC 00:00（台灣時間 08:00）
   workflow_dispatch: {}
 
 permissions:
   issues: write
+  contents: write
 
 jobs:
   sleep-status-report:
@@ -59,4 +62,17 @@ jobs:
           else
             gh issue comment "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" \
               --body-file sleep_report.md
+          fi
+
+      - name: Commit 最新報告到 status/latest_sleep_report.md
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add status/latest_sleep_report.md
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: 更新每日休眠監控報告 ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+            git push
+          else
+            echo "報告內容跟上次相同，不需要新的 commit。"
           fi
