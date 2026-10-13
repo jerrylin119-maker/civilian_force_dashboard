@@ -16,9 +16,13 @@ if not hasattr(db, "ensure_compliance_data_initialized"):
     db = importlib.reload(db)
 
 # 頁面配置
+# 補捐助專區（?view=subsidy）使用自己的分頁標題與圖示，這樣在瀏覽器歷史、書籤、分頁列
+# 才分得出和主網站（業務知識動態看板）是不同的網頁。
+_IS_SUBSIDY_VIEW = st.query_params.get("view", "") == "subsidy"
 st.set_page_config(
-    page_title="臺東縣消防局民力訓練科 — 業務知識動態看板",
-    page_icon="🚒",
+    page_title=("民力運用及訓練科 — 補捐助專區" if _IS_SUBSIDY_VIEW
+                else "臺東縣消防局民力運用及訓練科 — 業務知識動態看板"),
+    page_icon="💰" if _IS_SUBSIDY_VIEW else "🚒",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -1105,7 +1109,7 @@ def render_subsidy_view():
     st.session_state["is_admin"] = False
     st.markdown("""
     <div class="main-header">
-        <h1>💰 臺東縣消防局民力訓練科 — 補捐助案件專區</h1>
+        <h1>💰 臺東縣消防局民力運用及訓練科 — 補捐助案件專區</h1>
         <p>義消申請補縣府及各鄉鎮公所補捐助案件 | 業務 SOP • 申請案件注意要點 • 錯誤樣態歷史案例</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1122,7 +1126,7 @@ def render_subsidy_view():
     else:
         render_subsidy_business_tab()
 
-    st.caption("資料與「業務知識動態看板」主網站同步更新，內容由臺東縣消防局民力訓練科維護。")
+    st.caption("資料與「業務知識動態看板」主網站同步更新，內容由臺東縣消防局民力運用及訓練科維護。")
 
 
 # ==================== 補捐助專區（獨立網址）====================
@@ -1136,12 +1140,12 @@ st.markdown("""
 <div class="main-header">
     <div style="display: flex; align-items: center; justify-content: space-between;">
         <div>
-            <h1>🚒 臺東縣消防局民力訓練科 — 業務知識動態看板</h1>
+            <h1>🚒 臺東縣消防局民力運用及訓練科 — 業務知識動態看板</h1>
             <p>Taitung County Fire Bureau - Civilian & Volunteer Force Training Division | 專業義消承辦人導引 • 承辦人業務即選直達 • 我有話要說雙向回饋</p>
         </div>
         <div style="text-align: right; font-size: 0.85rem; opacity: 0.9;">
             📅 資料庫狀態：<strong>已連線</strong><br>
-            🏢 臺東縣消防局 民力訓練科
+            🏢 臺東縣消防局 民力運用及訓練科
         </div>
     </div>
 </div>
@@ -1174,7 +1178,7 @@ def jump_to_task_view(target_category, target_title):
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/fire-truck.png", width=60)
     st.title("民力看板控制台")
-    st.caption("🏢 臺東縣消防局 民力訓練科")
+    st.caption("🏢 臺東縣消防局 民力運用及訓練科")
     st.markdown("---")
 
     # 1. 👤 依承辦人快速查閱與點擊直達
@@ -1254,7 +1258,7 @@ with st.sidebar:
                 set_flash_message("✅ 已切換至科內維護模式！已為您自動開啟【⚙️ 科內線上維護】分頁。", icon="🔓")
                 st.rerun()
             else:
-                st.error("❌ 密碼錯誤，請洽民力訓練科系統管理員。")
+                st.error("❌ 密碼錯誤，請洽民力運用及訓練科系統管理員。")
     else:
         st.success("🟢 已啟用維護權限（可即時編輯與回覆留言）")
         if st.button("🔒 鎖定 / 退出維護模式", use_container_width=True):
@@ -1364,7 +1368,7 @@ if top_highlights:
     <div style="background: linear-gradient(to right, #fff1f2, #fff7ed); border: 1px solid #fecdd3; border-left: 6px solid #e11d48; border-radius: 10px; padding: 0.9rem 1.3rem; margin-bottom: 1.2rem; box-shadow: 0 2px 6px rgba(225, 29, 72, 0.06);">
         <div style="display: flex; align-items: center; justify-content: space-between;">
             <div>
-                <span style="font-size: 1.15rem; font-weight: 700; color: #9f1239;">📢 民力訓練科 — 最新業務異動與宣導重點 (Top 3 即時快訊)</span>
+                <span style="font-size: 1.15rem; font-weight: 700; color: #9f1239;">📢 民力運用及訓練科 — 最新業務異動與宣導重點 (Top 3 即時快訊)</span>
                 <span style="font-size: 0.85rem; color: #be123c; margin-left: 0.6rem;">外勤大隊與分隊同仁請特別留意以下最新重要期程與規定：</span>
             </div>
             <span style="background: #ffe4e6; color: #9f1239; font-size: 0.78rem; font-weight: 700; padding: 2px 8px; border-radius: 9999px; border: 1px solid #fecdd3;">即時同步中</span>
@@ -1559,7 +1563,7 @@ elif selected_tab == "🎯 訓練業務":
 # === 6. 其他推動業務 Tab ===
 elif selected_tab == "🌟 其他推動業務":
     st.markdown("### 【🌟 其他推動業務】")
-    st.caption("👤 **科內承辦人**：民力訓練科全體同仁")
+    st.caption("👤 **科內承辦人**：民力運用及訓練科全體同仁")
     
     tasks_cat = db.get_tasks_by_filter(category="其他推動業務")
     if not tasks_cat:
@@ -1576,7 +1580,7 @@ elif selected_tab == "💬 我有話要說":
     <div style="background: linear-gradient(to right, #ecfdf5, #f0fdf4); border: 1px solid #a7f3d0; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.5rem;">
         <h3 style="color: #065f46; margin-top: 0; margin-bottom: 0.4rem;">💬 我有話要說 — 臺東縣義消承辦人與分隊同仁雙向回饋專區</h3>
         <p style="color: #047857; font-size: 0.95rem; margin-bottom: 0;">
-            開放臺東大隊、關山大隊、成功大隊、大武大隊各分隊義消承辦人及全體同仁提出實務執行問題、法規諮詢、作業建議或系統回饋。民力訓練科將定期彙整、專人查明並公開回覆！
+            開放臺東大隊、關山大隊、成功大隊、大武大隊各分隊義消承辦人及全體同仁提出實務執行問題、法規諮詢、作業建議或系統回饋。民力運用及訓練科將定期彙整、專人查明並公開回覆！
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -1599,12 +1603,12 @@ elif selected_tab == "💬 我有話要說":
                     st.error("請務必填寫「所屬單位/分隊」及「反映內容」！")
                 else:
                     new_fb_id = db.add_feedback(fb_unit, fb_submitter, fb_category, fb_content, fb_contact)
-                    set_flash_message(f"🎉 成功送出意見！留言編號 #{new_fb_id}【{fb_unit}】，民力訓練科將盡速查明查覆。", icon="💌")
+                    set_flash_message(f"🎉 成功送出意見！留言編號 #{new_fb_id}【{fb_unit}】，民力運用及訓練科將盡速查明查覆。", icon="💌")
                     st.rerun()
 
-    # 右側：問題與民力訓練科回覆列表
+    # 右側：問題與民力運用及訓練科回覆列表
     with col_fb_list:
-        st.markdown("#### 📢 同仁意見與民力訓練科官方回覆看板")
+        st.markdown("#### 📢 同仁意見與民力運用及訓練科官方回覆看板")
         
         col_f1, col_f2 = st.columns([1, 1])
         with col_f1:
@@ -1658,14 +1662,14 @@ elif selected_tab == "💬 我有話要說":
                 if fb["admin_reply"] and fb["admin_reply"].strip():
                     st.markdown(f"""
                     <div class="feedback-reply-box" style="margin-top:-0.6rem; margin-bottom:1.2rem;">
-                        <strong>📢 民力訓練科回覆 ({fb['replied_at'] or ''})：</strong><br>
+                        <strong>📢 民力運用及訓練科回覆 ({fb['replied_at'] or ''})：</strong><br>
                         {safe_admin_reply}
                     </div>
                     """, unsafe_allow_html=True)
                 else:
                     st.markdown("""
                     <div style="font-size:0.85rem; color:#94a3b8; margin-top:-0.4rem; margin-bottom:1.2rem; padding-left:0.5rem;">
-                        ⏳ <em>民力訓練科正查明處理中，請稍候回覆...</em>
+                        ⏳ <em>民力運用及訓練科正查明處理中，請稍候回覆...</em>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -1827,7 +1831,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
             with st.form(f"reply_fb_form_{sel_fb_id}"):
                 curr_status_idx = db.FEEDBACK_STATUSES.index(cur_fb["status"]) if cur_fb["status"] in db.FEEDBACK_STATUSES else 0
                 reply_status = st.selectbox("處理狀態", db.FEEDBACK_STATUSES, index=curr_status_idx, key=f"fb_status_{sel_fb_id}")
-                reply_content = st.text_area("民力訓練科官方回覆內容 (將公開於看板供同仁查閱)", value=cur_fb["admin_reply"] or "", height=140, key=f"fb_reply_{sel_fb_id}")
+                reply_content = st.text_area("民力運用及訓練科官方回覆內容 (將公開於看板供同仁查閱)", value=cur_fb["admin_reply"] or "", height=140, key=f"fb_reply_{sel_fb_id}")
                 
                 rep_btn = st.form_submit_button("📢 發布 / 更新官方回覆", type="primary", use_container_width=True)
 

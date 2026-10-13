@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-database.py - 臺東縣消防局民力訓練科 業務知識動態看板 資料庫模組
+database.py - 臺東縣消防局民力運用及訓練科 業務知識動態看板 資料庫模組
 依據「臺東縣消防局組織架構」完整納入四大外勤大隊與所屬分隊：
 - 臺東大隊：臺東、臺東救護、豐田、大豐、南王、特種搜救、科技救災、搜救犬、卑南、知本、綠島、蘭嶼
 - 關山大隊：關山、池上、海端、鹿野、延平、利稻
@@ -1057,7 +1057,7 @@ def get_full_system_data():
         "application_notes": notes_df.to_dict(orient="records"),
         "error_cases": cases_df.to_dict(orient="records"),
         "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "organization": "臺東縣消防局民力訓練科"
+        "organization": "臺東縣消防局民力運用及訓練科"
     }
 
 
@@ -1683,7 +1683,7 @@ def push_full_backup_to_github(owner, repo, pat, branch="main", backup_path="clo
     summary = (f"{task_cnt} 筆業務 | {len(full_data.get('guides', []))} 情境 | {len(full_data.get('feedbacks', []))} 留言 | "
                f"{len(assigned)} 交辦事項 | {len(full_data.get('application_notes', []))} 注意要點 | {len(full_data.get('error_cases', []))} 錯誤案例")
     push_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
-    commit_msg = f"chore: 自動備份民力訓練科業務資料 ({push_time} 台灣時間)"
+    commit_msg = f"chore: 自動備份民力運用及訓練科業務資料 ({push_time} 台灣時間)"
 
     payload = {
         "message": commit_msg,
