@@ -7,7 +7,13 @@ import streamlit as st
 import pandas as pd
 import re
 from datetime import datetime, timedelta, timezone
+import importlib
 import database as db
+
+# Streamlit Cloud 重新部署後只會重跑 app.py，已經載入記憶體的 database 模組可能還是舊版
+# （缺少新函式，會造成 AttributeError）。偵測到缺函式時強制重新載入，不必手動 Reboot app。
+if not hasattr(db, "ensure_compliance_data_initialized"):
+    db = importlib.reload(db)
 
 # 頁面配置
 st.set_page_config(
@@ -464,278 +470,6 @@ if "compliance_data_checked" not in st.session_state:
     except Exception:
         import traceback
         traceback.print_exc()
-
-# 系統頂部橫幅
-st.markdown("""
-<div class="main-header">
-    <div style="display: flex; align-items: center; justify-content: space-between;">
-        <div>
-            <h1>🚒 臺東縣消防局民力訓練科 — 業務知識動態看板</h1>
-            <p>Taitung County Fire Bureau - Civilian & Volunteer Force Training Division | 專業義消承辦人導引 • 承辦人業務即選直達 • 我有話要說雙向回饋</p>
-        </div>
-        <div style="text-align: right; font-size: 0.85rem; opacity: 0.9;">
-            📅 資料庫狀態：<strong>已連線</strong><br>
-            🏢 臺東縣消防局 民力訓練科
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-# 顯示任何跨頁通知提示
-show_flash_message()
-
-# 分類圖示對照
-CATEGORY_ICON_MAP = {
-    "義消業務": ("🚒 義消業務", "🚒"),
-    "義消福利": ("🎁 義消福利", "🎁"),
-    "補捐助業務": ("💰 補捐助業務", "💰"),
-    "訓練業務": ("🎯 訓練業務", "🎯"),
-    "其他推動業務": ("🌟 其他推動業務", "🌟")
-}
-
-
-def jump_to_task_view(target_category, target_title):
-    """跨頁跳轉直達指定業務並自動定位展開 SOP"""
-    tab_name = CATEGORY_ICON_MAP.get(target_category.strip(), (target_category.strip(), "📄"))[0]
-    st.session_state["top_main_nav"] = tab_name
-    st.session_state["active_tab"] = tab_name
-    st.session_state["target_task_title"] = target_title
-    set_flash_message(f"🚀 已切換至【{tab_name}】並為您定位展開【{target_title}】！", icon="🎯")
-    st.rerun()
-
-
-# 側邊欄設計 (★ 依承辦人即時列出業務並支援點擊直達切換頁面)
-with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/fire-truck.png", width=60)
-    st.title("民力看板控制台")
-    st.caption("🏢 臺東縣消防局 民力訓練科")
-    st.markdown("---")
-
-    # 1. 👤 依承辦人快速查閱與點擊直達
-    st.subheader("👤 依承辦人快速查閱與直達")
-    all_owners = ["全部承辦人"] + db.get_owners_list()
-    cur_owner_idx = all_owners.index(st.session_state["selected_sidebar_owner"]) if st.session_state["selected_sidebar_owner"] in all_owners else 0
-    sel_owner = st.selectbox("請選擇科內承辦人", all_owners, index=cur_owner_idx, key="sidebar_owner_picker")
-    st.session_state["selected_sidebar_owner"] = sel_owner
-
-    # 即時顯示該承辦人負責的所有業務項目清單 (點擊直達該頁面)
-    officer_tasks = get_tasks_for_officer(sel_owner)
-    
-    if sel_owner != "全部承辦人":
-        st.markdown(f"**📋 【{sel_owner}】負責業務 ({len(officer_tasks)} 項，點擊直達)：**")
-    else:
-        st.markdown(f"**📋 全科列管業務清單 ({len(officer_tasks)} 項，點擊直達)：**")
-
-    if not officer_tasks:
-        st.caption("該承辦人目前無列管業務。")
-    else:
-        for ot in officer_tasks:
-            target_tab_name = CATEGORY_ICON_MAP.get(ot["category"], (ot["category"], "📄"))[0]
-            cat_icon = CATEGORY_ICON_MAP.get(ot["category"], ("", "📄"))[1]
-            btn_label = f"{cat_icon} {ot['title']}"
-            
-            if st.button(btn_label, key=f"btn_jump_task_{ot['id']}", use_container_width=True):
-                jump_to_task_view(ot["category"], ot["title"])
-
-    st.markdown("---")
-
-    # 2. 🔍 業務關鍵字搜尋與直達
-    st.subheader("🔍 關鍵字搜尋與直達")
-    with st.form("quick_search_form"):
-        kw_input = st.text_input("輸入關鍵字 (業務名稱/SOP/法規)", value=st.session_state["search_query"], placeholder="例：健檢、消防衣、補捐助...")
-        col_qs1, col_qs2 = st.columns([1, 1])
-        with col_qs1:
-            btn_kw_search = st.form_submit_button("🔍 搜尋", type="primary", use_container_width=True)
-        with col_qs2:
-            btn_kw_reset = st.form_submit_button("🔄 清除", use_container_width=True)
-
-        if btn_kw_search:
-            st.session_state["search_query"] = kw_input.strip()
-            st.rerun()
-        if btn_kw_reset:
-            st.session_state["search_query"] = ""
-            st.rerun()
-
-    if st.session_state["search_query"]:
-        search_results = search_tasks_for_jump(st.session_state["search_query"])
-        st.markdown(f"**🔎 搜尋「{st.session_state['search_query']}」結果 ({len(search_results)} 項)：**")
-        if not search_results:
-            st.caption("無符合關鍵字的業務項目。")
-        else:
-            for s_task in search_results:
-                target_tab_name = CATEGORY_ICON_MAP.get(s_task["category"], (s_task["category"], "📄"))[0]
-                cat_icon = CATEGORY_ICON_MAP.get(s_task["category"], ("", "📄"))[1]
-                if st.button(f"{cat_icon} {s_task['title']}", key=f"btn_search_jump_{s_task['id']}", use_container_width=True):
-                    jump_to_task_view(s_task["category"], s_task["title"])
-
-    st.markdown("---")
-
-    # 3. 科內維護模式（管理員登入）
-    st.subheader("🔐 科內維護模式")
-    if not st.session_state["is_admin"]:
-        try:
-            _using_default_pw = not st.secrets.get("admin_password")
-        except Exception:
-            _using_default_pw = True
-        if _using_default_pw:
-            st.caption("⚠️ 尚未於 Streamlit Cloud 設定自訂管理密碼，目前為預設密碼，建議盡快至 App → Settings → Secrets 新增 `admin_password` 設定值。")
-        admin_pass = st.text_input("請輸入管理密碼", type="password", help="尚未設定自訂密碼前，預設科內維護密碼為：119")
-        if st.button("🔓 啟用線上維護模式", use_container_width=True):
-            if admin_pass and admin_pass in get_valid_admin_passwords():
-                st.session_state["is_admin"] = True
-                st.session_state["top_main_nav"] = "⚙️ 科內線上維護 (Excel介面)"
-                st.session_state["active_tab"] = "⚙️ 科內線上維護 (Excel介面)"
-                set_flash_message("✅ 已切換至科內維護模式！已為您自動開啟【⚙️ 科內線上維護】分頁。", icon="🔓")
-                st.rerun()
-            else:
-                st.error("❌ 密碼錯誤，請洽民力訓練科系統管理員。")
-    else:
-        st.success("🟢 已啟用維護權限（可即時編輯與回覆留言）")
-        if st.button("🔒 鎖定 / 退出維護模式", use_container_width=True):
-            st.session_state["is_admin"] = False
-            set_flash_message("🔒 已退出維護模式。", msg_type="info", icon="🔒")
-            st.rerun()
-
-    st.markdown("---")
-
-    # 4. 資料庫備份與匯出
-    st.subheader("💾 資料庫備份與匯出")
-    all_df = db.get_all_tasks_df()
-    csv_data = all_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button(
-        label="📥 匯出完整 CSV 備份",
-        data=csv_data,
-        file_name=f"ttfd_minli_tasks_backup_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime="text/csv",
-        use_container_width=True
-    )
-
-
-
-# ==================== 📋 民力科近期交辦協助事項 (公告欄) ====================
-assigned_items = db.get_all_assigned_tasks() if hasattr(db, "get_all_assigned_tasks") else []
-pending_items = [t for t in assigned_items if not t["is_done"]]
-done_items = [t for t in assigned_items if t["is_done"]]
-
-if assigned_items:
-    st.markdown("""
-    <div style="background: linear-gradient(to right, #f0f9ff, #e0f2fe); border: 1px solid #bae6fd; border-left: 6px solid #0284c7; border-radius: 10px; padding: 0.8rem 1.3rem; margin-bottom: 0.5rem;">
-        <span style="font-size: 1.1rem; font-weight: 700; color: #0c4a6e;">📋 民力科近期交辦協助事項</span>
-        <span style="font-size: 0.82rem; color: #0369a1; margin-left: 0.8rem;">各外勤大隊、分隊請依下列項目確認辦理並於期限前回覆</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    if pending_items:
-        for at in pending_items:
-            dl_badge = ""
-            if at.get("deadline_note") and at["deadline_note"].strip():
-                dl_badge = f'<span style="background:#fef3c7; color:#92400e; font-size:0.8rem; font-weight:700; padding:2px 8px; border-radius:4px; margin-left:0.6rem; border:1px solid #fde68a;">⏰ {at["deadline_note"]}</span>'
-            st.markdown(f"""
-            <div style="display:flex; align-items:center; padding: 0.55rem 1rem; margin-bottom:0.3rem; background:#fff; border:1px solid #e0f2fe; border-radius:7px; border-left:4px solid #0284c7;">
-                <span style="font-size:1.1rem; margin-right:0.5rem;">🔵</span>
-                <span style="font-size:0.97rem; color:#1e293b; font-weight:600; flex:1;">{at["item_content"]}</span>
-                {dl_badge}
-            </div>
-            """, unsafe_allow_html=True)
-    
-    if done_items:
-        with st.expander(f"✅ 已完成項目（{len(done_items)} 項）", expanded=False):
-            for at in done_items:
-                st.markdown(f"""
-                <div style="display:flex; align-items:center; padding:0.45rem 1rem; margin-bottom:0.25rem; background:#f8fafc; border:1px solid #e2e8f0; border-radius:7px; opacity:0.65;">
-                    <span style="font-size:1rem; margin-right:0.5rem;">✅</span>
-                    <span style="font-size:0.92rem; color:#64748b; text-decoration:line-through; flex:1;">{at["item_content"]}</span>
-                    <span style="font-size:0.8rem; color:#94a3b8; margin-left:0.5rem;">{at.get("deadline_note", "")}</span>
-                </div>
-                """, unsafe_allow_html=True)
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-
-
-# 全域 KPI 統計指標
-stats = db.get_summary_stats()
-col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
-
-with col_kpi1:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-title">📋 列管業務總數</div>
-        <div class="metric-value">{stats['total']} <span style="font-size:1rem;color:#64748b;">項</span></div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col_kpi2:
-    st.markdown(f"""
-    <div class="metric-card metric-card-warning">
-        <div class="metric-title">🚀 規劃與執行中案件</div>
-        <div class="metric-value">{stats['in_progress']} <span style="font-size:1rem;color:#64748b;">項</span></div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col_kpi3:
-    st.markdown(f"""
-    <div class="metric-card metric-card-alert">
-        <div class="metric-title">⚠️ 最新異動宣導提醒</div>
-        <div class="metric-value" style="color:#dc2626;">{stats['highlight']} <span style="font-size:1rem;color:#dc2626;">則</span></div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col_kpi4:
-    st.markdown(f"""
-    <div class="metric-card metric-card-success">
-        <div class="metric-title">💬 我有話要說回饋數</div>
-        <div class="metric-value" style="color:#047857;">{stats['feedback_total']} <span style="font-size:1rem;color:#64748b;">則 ({stats['feedback_replied']}已覆)</span></div>
-    </div>
-    """, unsafe_allow_html=True)
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# ==================== 📢 最新業務異動與宣導重點 (Top 3 即時快訊專區) ====================
-top_highlights = get_top_latest_highlights_safe(limit=3)
-
-if top_highlights:
-    st.markdown("""
-    <div style="background: linear-gradient(to right, #fff1f2, #fff7ed); border: 1px solid #fecdd3; border-left: 6px solid #e11d48; border-radius: 10px; padding: 0.9rem 1.3rem; margin-bottom: 1.2rem; box-shadow: 0 2px 6px rgba(225, 29, 72, 0.06);">
-        <div style="display: flex; align-items: center; justify-content: space-between;">
-            <div>
-                <span style="font-size: 1.15rem; font-weight: 700; color: #9f1239;">📢 民力訓練科 — 最新業務異動與宣導重點 (Top 3 即時快訊)</span>
-                <span style="font-size: 0.85rem; color: #be123c; margin-left: 0.6rem;">外勤大隊與分隊同仁請特別留意以下最新重要期程與規定：</span>
-            </div>
-            <span style="background: #ffe4e6; color: #9f1239; font-size: 0.78rem; font-weight: 700; padding: 2px 8px; border-radius: 9999px; border: 1px solid #fecdd3;">即時同步中</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    cols_hl = st.columns(len(top_highlights))
-    for idx, (col_h, hl_item) in enumerate(zip(cols_hl, top_highlights)):
-        with col_h:
-            target_tab_name = CATEGORY_ICON_MAP.get(hl_item["category"], (hl_item["category"], "📄"))[0]
-            cat_icon = CATEGORY_ICON_MAP.get(hl_item["category"], ("", "📄"))[1]
-            
-            st.markdown(f"""
-            <div style="background: #ffffff; border: 1px solid #fed7aa; border-radius: 8px; padding: 0.9rem 1rem; height: 100%; box-shadow: 0 2px 4px rgba(0,0,0,0.03); border-top: 4px solid #f97316;">
-                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 0.3rem;">
-                    <span style="background:#ffedd5; color:#9a3412; font-size:0.75rem; font-weight:700; padding:2px 6px; border-radius:4px;">{cat_icon} {hl_item['category']}</span>
-                    <span style="font-size:0.78rem; color:#94a3b8;">🕒 {hl_item['last_updated'][:10] if hl_item.get('last_updated') else ''}</span>
-                </div>
-                <div style="font-size: 1rem; font-weight: 700; color: #1e293b; margin: 0.4rem 0 0.3rem 0; line-height: 1.3;">
-                    {hl_item['title']}
-                </div>
-                <div style="font-size: 0.82rem; color: #64748b; margin-bottom: 0.5rem;">
-                    👤 承辦人：<strong style="color:#0f172a;">{hl_item['owner'] or '未指派'}</strong>
-                </div>
-                <div style="background: #fff5f5; border: 1px dashed #fca5a5; border-radius: 6px; padding: 0.5rem 0.7rem; font-size: 0.88rem; color: #b91c1c; font-weight: 600; line-height: 1.4; margin-bottom: 0.6rem;">
-                    {hl_item['update_highlight']}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if st.button(f"🚀 點擊直達【{hl_item['title']}】", key=f"btn_hl_jump_{hl_item['id']}", use_container_width=True):
-                jump_to_task_view(hl_item["category"], hl_item["title"])
-                
-    st.markdown("<br>", unsafe_allow_html=True)
-
-
 
 # 輔助函式：取得狀態 Badge HTML
 def get_status_badge(status):
@@ -1312,6 +1046,363 @@ def render_error_cases_page():
                         st.rerun()
 
 
+def render_subsidy_business_tab():
+    """💰 補捐助業務頁面（主網站與補捐助專區共用）"""
+    st.markdown("### 【💰 補捐助業務】")
+    st.caption("👤 **科內承辦人**：廖昱翔科員、林威宇小隊長")
+    
+    st.markdown("""
+    <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 1rem 1.2rem; margin-bottom: 1.2rem;">
+        <h4 style="color: #166534; margin-top:0; margin-bottom: 0.5rem;">🎯 義消申請補縣府及各鄉鎮公所補捐助案件管理專區</h4>
+        <div style="margin-top: 0.5rem;">
+            <span class="pipeline-step step-done">1. 申請表單與系統登錄</span> ➔ 
+            <span class="pipeline-step step-done">2. 資格初審與單據查核</span> ➔ 
+            <span class="pipeline-step step-active">3. 依計畫執行採購/活動</span> ➔ 
+            <span class="pipeline-step step-pending">4. 黏存單據送科核銷</span> ➔ 
+            <span class="pipeline-step step-pending">5. 結案撥款</span>
+        </div>
+        <div style="margin-top: 0.8rem; font-size: 0.88rem; color: #15803d;">
+            📌 <strong>申請範例更新提示</strong>：補捐助申請範例將隨時間動態更新，<span style="color:#dc2626;font-weight:700;">更新部分會以顏色做清楚區別</span>，請各分隊務必至系統下載最新版本填報。
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    def _go_to_tab(tab_label):
+        st.session_state["top_main_nav"] = tab_label
+
+    col_go1, col_go2 = st.columns(2)
+    with col_go1:
+        st.button("📌 申請案件注意要點（活動費／設備費）", on_click=_go_to_tab, args=("📌 申請注意要點",),
+                  use_container_width=True, key="go_notes_page")
+    with col_go2:
+        st.button("⚠️ 錯誤樣態歷史案例", on_click=_go_to_tab, args=("⚠️ 錯誤樣態案例",),
+                  use_container_width=True, key="go_cases_page")
+
+    tasks_cat = db.get_tasks_by_filter(category="補捐助業務")
+    st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
+    if not tasks_cat:
+        st.info("目前【補捐助業務】無符合條件的項目。")
+    else:
+        for t in tasks_cat:
+            render_task_card(t)
+
+    if st.session_state.get("is_admin"):
+        st.markdown("---")
+        st.caption("📎 **補捐助專區獨立網址**（只顯示本頁、申請注意要點、錯誤樣態案例，可直接轉給只需查看補捐助的同仁；僅承辦人維護模式看得到這段說明）：")
+        st.code(SUBSIDY_VIEW_URL, language=None)
+
+
+SUBSIDY_VIEW_URL = "https://civilianforcedashboard.streamlit.app/?view=subsidy"
+SUBSIDY_VIEW_TABS = ["💰 補捐助業務", "📌 申請注意要點", "⚠️ 錯誤樣態案例"]
+
+
+def render_subsidy_view():
+    """補捐助專區（獨立網址 ?view=subsidy）：只顯示補捐助相關三個頁面。
+
+    沒有側邊欄、KPI、其他業務分頁與維護模式，資料和主網站共用同一份。
+    這是給同仁方便查閱的精簡檢視，不是權限控管；維護請從主網址登入維護模式。
+    """
+    st.session_state["is_admin"] = False
+    st.markdown("""
+    <div class="main-header">
+        <h1>💰 臺東縣消防局民力訓練科 — 補捐助案件專區</h1>
+        <p>義消申請補縣府及各鄉鎮公所補捐助案件 | 業務 SOP • 申請案件注意要點 • 錯誤樣態歷史案例</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.session_state.get("top_main_nav") not in SUBSIDY_VIEW_TABS:
+        st.session_state["top_main_nav"] = SUBSIDY_VIEW_TABS[0]
+    selected = st.radio("專區導覽", SUBSIDY_VIEW_TABS, horizontal=True,
+                        label_visibility="collapsed", key="top_main_nav")
+
+    if selected == "📌 申請注意要點":
+        render_application_notes_page()
+    elif selected == "⚠️ 錯誤樣態案例":
+        render_error_cases_page()
+    else:
+        render_subsidy_business_tab()
+
+    st.caption("資料與「業務知識動態看板」主網站同步更新，內容由臺東縣消防局民力訓練科維護。")
+
+
+# ==================== 補捐助專區（獨立網址）====================
+# 網址後面加上 ?view=subsidy 時，只顯示補捐助相關三個頁面，其餘內容（側邊欄、KPI、其他業務、維護模式）都不顯示。
+if st.query_params.get("view", "") == "subsidy":
+    render_subsidy_view()
+    st.stop()
+
+# 系統頂部橫幅
+st.markdown("""
+<div class="main-header">
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+        <div>
+            <h1>🚒 臺東縣消防局民力訓練科 — 業務知識動態看板</h1>
+            <p>Taitung County Fire Bureau - Civilian & Volunteer Force Training Division | 專業義消承辦人導引 • 承辦人業務即選直達 • 我有話要說雙向回饋</p>
+        </div>
+        <div style="text-align: right; font-size: 0.85rem; opacity: 0.9;">
+            📅 資料庫狀態：<strong>已連線</strong><br>
+            🏢 臺東縣消防局 民力訓練科
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# 顯示任何跨頁通知提示
+show_flash_message()
+
+# 分類圖示對照
+CATEGORY_ICON_MAP = {
+    "義消業務": ("🚒 義消業務", "🚒"),
+    "義消福利": ("🎁 義消福利", "🎁"),
+    "補捐助業務": ("💰 補捐助業務", "💰"),
+    "訓練業務": ("🎯 訓練業務", "🎯"),
+    "其他推動業務": ("🌟 其他推動業務", "🌟")
+}
+
+
+def jump_to_task_view(target_category, target_title):
+    """跨頁跳轉直達指定業務並自動定位展開 SOP"""
+    tab_name = CATEGORY_ICON_MAP.get(target_category.strip(), (target_category.strip(), "📄"))[0]
+    st.session_state["top_main_nav"] = tab_name
+    st.session_state["active_tab"] = tab_name
+    st.session_state["target_task_title"] = target_title
+    set_flash_message(f"🚀 已切換至【{tab_name}】並為您定位展開【{target_title}】！", icon="🎯")
+    st.rerun()
+
+
+# 側邊欄設計 (★ 依承辦人即時列出業務並支援點擊直達切換頁面)
+with st.sidebar:
+    st.image("https://img.icons8.com/fluency/96/fire-truck.png", width=60)
+    st.title("民力看板控制台")
+    st.caption("🏢 臺東縣消防局 民力訓練科")
+    st.markdown("---")
+
+    # 1. 👤 依承辦人快速查閱與點擊直達
+    st.subheader("👤 依承辦人快速查閱與直達")
+    all_owners = ["全部承辦人"] + db.get_owners_list()
+    cur_owner_idx = all_owners.index(st.session_state["selected_sidebar_owner"]) if st.session_state["selected_sidebar_owner"] in all_owners else 0
+    sel_owner = st.selectbox("請選擇科內承辦人", all_owners, index=cur_owner_idx, key="sidebar_owner_picker")
+    st.session_state["selected_sidebar_owner"] = sel_owner
+
+    # 即時顯示該承辦人負責的所有業務項目清單 (點擊直達該頁面)
+    officer_tasks = get_tasks_for_officer(sel_owner)
+    
+    if sel_owner != "全部承辦人":
+        st.markdown(f"**📋 【{sel_owner}】負責業務 ({len(officer_tasks)} 項，點擊直達)：**")
+    else:
+        st.markdown(f"**📋 全科列管業務清單 ({len(officer_tasks)} 項，點擊直達)：**")
+
+    if not officer_tasks:
+        st.caption("該承辦人目前無列管業務。")
+    else:
+        for ot in officer_tasks:
+            target_tab_name = CATEGORY_ICON_MAP.get(ot["category"], (ot["category"], "📄"))[0]
+            cat_icon = CATEGORY_ICON_MAP.get(ot["category"], ("", "📄"))[1]
+            btn_label = f"{cat_icon} {ot['title']}"
+            
+            if st.button(btn_label, key=f"btn_jump_task_{ot['id']}", use_container_width=True):
+                jump_to_task_view(ot["category"], ot["title"])
+
+    st.markdown("---")
+
+    # 2. 🔍 業務關鍵字搜尋與直達
+    st.subheader("🔍 關鍵字搜尋與直達")
+    with st.form("quick_search_form"):
+        kw_input = st.text_input("輸入關鍵字 (業務名稱/SOP/法規)", value=st.session_state["search_query"], placeholder="例：健檢、消防衣、補捐助...")
+        col_qs1, col_qs2 = st.columns([1, 1])
+        with col_qs1:
+            btn_kw_search = st.form_submit_button("🔍 搜尋", type="primary", use_container_width=True)
+        with col_qs2:
+            btn_kw_reset = st.form_submit_button("🔄 清除", use_container_width=True)
+
+        if btn_kw_search:
+            st.session_state["search_query"] = kw_input.strip()
+            st.rerun()
+        if btn_kw_reset:
+            st.session_state["search_query"] = ""
+            st.rerun()
+
+    if st.session_state["search_query"]:
+        search_results = search_tasks_for_jump(st.session_state["search_query"])
+        st.markdown(f"**🔎 搜尋「{st.session_state['search_query']}」結果 ({len(search_results)} 項)：**")
+        if not search_results:
+            st.caption("無符合關鍵字的業務項目。")
+        else:
+            for s_task in search_results:
+                target_tab_name = CATEGORY_ICON_MAP.get(s_task["category"], (s_task["category"], "📄"))[0]
+                cat_icon = CATEGORY_ICON_MAP.get(s_task["category"], ("", "📄"))[1]
+                if st.button(f"{cat_icon} {s_task['title']}", key=f"btn_search_jump_{s_task['id']}", use_container_width=True):
+                    jump_to_task_view(s_task["category"], s_task["title"])
+
+    st.markdown("---")
+
+    # 3. 科內維護模式（管理員登入）
+    st.subheader("🔐 科內維護模式")
+    if not st.session_state["is_admin"]:
+        try:
+            _using_default_pw = not st.secrets.get("admin_password")
+        except Exception:
+            _using_default_pw = True
+        if _using_default_pw:
+            st.caption("⚠️ 尚未於 Streamlit Cloud 設定自訂管理密碼，目前為預設密碼，建議盡快至 App → Settings → Secrets 新增 `admin_password` 設定值。")
+        admin_pass = st.text_input("請輸入管理密碼", type="password", help="尚未設定自訂密碼前，預設科內維護密碼為：119")
+        if st.button("🔓 啟用線上維護模式", use_container_width=True):
+            if admin_pass and admin_pass in get_valid_admin_passwords():
+                st.session_state["is_admin"] = True
+                st.session_state["top_main_nav"] = "⚙️ 科內線上維護 (Excel介面)"
+                st.session_state["active_tab"] = "⚙️ 科內線上維護 (Excel介面)"
+                set_flash_message("✅ 已切換至科內維護模式！已為您自動開啟【⚙️ 科內線上維護】分頁。", icon="🔓")
+                st.rerun()
+            else:
+                st.error("❌ 密碼錯誤，請洽民力訓練科系統管理員。")
+    else:
+        st.success("🟢 已啟用維護權限（可即時編輯與回覆留言）")
+        if st.button("🔒 鎖定 / 退出維護模式", use_container_width=True):
+            st.session_state["is_admin"] = False
+            set_flash_message("🔒 已退出維護模式。", msg_type="info", icon="🔒")
+            st.rerun()
+
+    st.markdown("---")
+
+    # 4. 資料庫備份與匯出
+    st.subheader("💾 資料庫備份與匯出")
+    all_df = db.get_all_tasks_df()
+    csv_data = all_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    st.download_button(
+        label="📥 匯出完整 CSV 備份",
+        data=csv_data,
+        file_name=f"ttfd_minli_tasks_backup_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+
+
+
+# ==================== 📋 民力科近期交辦協助事項 (公告欄) ====================
+assigned_items = db.get_all_assigned_tasks() if hasattr(db, "get_all_assigned_tasks") else []
+pending_items = [t for t in assigned_items if not t["is_done"]]
+done_items = [t for t in assigned_items if t["is_done"]]
+
+if assigned_items:
+    st.markdown("""
+    <div style="background: linear-gradient(to right, #f0f9ff, #e0f2fe); border: 1px solid #bae6fd; border-left: 6px solid #0284c7; border-radius: 10px; padding: 0.8rem 1.3rem; margin-bottom: 0.5rem;">
+        <span style="font-size: 1.1rem; font-weight: 700; color: #0c4a6e;">📋 民力科近期交辦協助事項</span>
+        <span style="font-size: 0.82rem; color: #0369a1; margin-left: 0.8rem;">各外勤大隊、分隊請依下列項目確認辦理並於期限前回覆</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if pending_items:
+        for at in pending_items:
+            dl_badge = ""
+            if at.get("deadline_note") and at["deadline_note"].strip():
+                dl_badge = f'<span style="background:#fef3c7; color:#92400e; font-size:0.8rem; font-weight:700; padding:2px 8px; border-radius:4px; margin-left:0.6rem; border:1px solid #fde68a;">⏰ {at["deadline_note"]}</span>'
+            st.markdown(f"""
+            <div style="display:flex; align-items:center; padding: 0.55rem 1rem; margin-bottom:0.3rem; background:#fff; border:1px solid #e0f2fe; border-radius:7px; border-left:4px solid #0284c7;">
+                <span style="font-size:1.1rem; margin-right:0.5rem;">🔵</span>
+                <span style="font-size:0.97rem; color:#1e293b; font-weight:600; flex:1;">{at["item_content"]}</span>
+                {dl_badge}
+            </div>
+            """, unsafe_allow_html=True)
+    
+    if done_items:
+        with st.expander(f"✅ 已完成項目（{len(done_items)} 項）", expanded=False):
+            for at in done_items:
+                st.markdown(f"""
+                <div style="display:flex; align-items:center; padding:0.45rem 1rem; margin-bottom:0.25rem; background:#f8fafc; border:1px solid #e2e8f0; border-radius:7px; opacity:0.65;">
+                    <span style="font-size:1rem; margin-right:0.5rem;">✅</span>
+                    <span style="font-size:0.92rem; color:#64748b; text-decoration:line-through; flex:1;">{at["item_content"]}</span>
+                    <span style="font-size:0.8rem; color:#94a3b8; margin-left:0.5rem;">{at.get("deadline_note", "")}</span>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+
+
+# 全域 KPI 統計指標
+stats = db.get_summary_stats()
+col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+
+with col_kpi1:
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-title">📋 列管業務總數</div>
+        <div class="metric-value">{stats['total']} <span style="font-size:1rem;color:#64748b;">項</span></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col_kpi2:
+    st.markdown(f"""
+    <div class="metric-card metric-card-warning">
+        <div class="metric-title">🚀 規劃與執行中案件</div>
+        <div class="metric-value">{stats['in_progress']} <span style="font-size:1rem;color:#64748b;">項</span></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col_kpi3:
+    st.markdown(f"""
+    <div class="metric-card metric-card-alert">
+        <div class="metric-title">⚠️ 最新異動宣導提醒</div>
+        <div class="metric-value" style="color:#dc2626;">{stats['highlight']} <span style="font-size:1rem;color:#dc2626;">則</span></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col_kpi4:
+    st.markdown(f"""
+    <div class="metric-card metric-card-success">
+        <div class="metric-title">💬 我有話要說回饋數</div>
+        <div class="metric-value" style="color:#047857;">{stats['feedback_total']} <span style="font-size:1rem;color:#64748b;">則 ({stats['feedback_replied']}已覆)</span></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ==================== 📢 最新業務異動與宣導重點 (Top 3 即時快訊專區) ====================
+top_highlights = get_top_latest_highlights_safe(limit=3)
+
+if top_highlights:
+    st.markdown("""
+    <div style="background: linear-gradient(to right, #fff1f2, #fff7ed); border: 1px solid #fecdd3; border-left: 6px solid #e11d48; border-radius: 10px; padding: 0.9rem 1.3rem; margin-bottom: 1.2rem; box-shadow: 0 2px 6px rgba(225, 29, 72, 0.06);">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div>
+                <span style="font-size: 1.15rem; font-weight: 700; color: #9f1239;">📢 民力訓練科 — 最新業務異動與宣導重點 (Top 3 即時快訊)</span>
+                <span style="font-size: 0.85rem; color: #be123c; margin-left: 0.6rem;">外勤大隊與分隊同仁請特別留意以下最新重要期程與規定：</span>
+            </div>
+            <span style="background: #ffe4e6; color: #9f1239; font-size: 0.78rem; font-weight: 700; padding: 2px 8px; border-radius: 9999px; border: 1px solid #fecdd3;">即時同步中</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    cols_hl = st.columns(len(top_highlights))
+    for idx, (col_h, hl_item) in enumerate(zip(cols_hl, top_highlights)):
+        with col_h:
+            target_tab_name = CATEGORY_ICON_MAP.get(hl_item["category"], (hl_item["category"], "📄"))[0]
+            cat_icon = CATEGORY_ICON_MAP.get(hl_item["category"], ("", "📄"))[1]
+            
+            st.markdown(f"""
+            <div style="background: #ffffff; border: 1px solid #fed7aa; border-radius: 8px; padding: 0.9rem 1rem; height: 100%; box-shadow: 0 2px 4px rgba(0,0,0,0.03); border-top: 4px solid #f97316;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 0.3rem;">
+                    <span style="background:#ffedd5; color:#9a3412; font-size:0.75rem; font-weight:700; padding:2px 6px; border-radius:4px;">{cat_icon} {hl_item['category']}</span>
+                    <span style="font-size:0.78rem; color:#94a3b8;">🕒 {hl_item['last_updated'][:10] if hl_item.get('last_updated') else ''}</span>
+                </div>
+                <div style="font-size: 1rem; font-weight: 700; color: #1e293b; margin: 0.4rem 0 0.3rem 0; line-height: 1.3;">
+                    {hl_item['title']}
+                </div>
+                <div style="font-size: 0.82rem; color: #64748b; margin-bottom: 0.5rem;">
+                    👤 承辦人：<strong style="color:#0f172a;">{hl_item['owner'] or '未指派'}</strong>
+                </div>
+                <div style="background: #fff5f5; border: 1px dashed #fca5a5; border-radius: 6px; padding: 0.5rem 0.7rem; font-size: 0.88rem; color: #b91c1c; font-weight: 600; line-height: 1.4; margin-bottom: 0.6rem;">
+                    {hl_item['update_highlight']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if st.button(f"🚀 點擊直達【{hl_item['title']}】", key=f"btn_hl_jump_{hl_item['id']}", use_container_width=True):
+                jump_to_task_view(hl_item["category"], hl_item["title"])
+                
+    st.markdown("<br>", unsafe_allow_html=True)
+
+
+
 # ==================== 頂部主導覽標籤列 (支援程式化切換與點選) ====================
 tab_names = [
     "🎖️ 專業義消承辦人",
@@ -1439,44 +1530,7 @@ elif selected_tab == "🎁 義消福利":
 
 # === 4. 補捐助業務 Tab ===
 elif selected_tab == "💰 補捐助業務":
-    st.markdown("### 【💰 補捐助業務】")
-    st.caption("👤 **科內承辦人**：廖昱翔科員、林威宇小隊長")
-    
-    st.markdown("""
-    <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 1rem 1.2rem; margin-bottom: 1.2rem;">
-        <h4 style="color: #166534; margin-top:0; margin-bottom: 0.5rem;">🎯 義消申請補縣府及各鄉鎮公所補捐助案件管理專區</h4>
-        <div style="margin-top: 0.5rem;">
-            <span class="pipeline-step step-done">1. 申請表單與系統登錄</span> ➔ 
-            <span class="pipeline-step step-done">2. 資格初審與單據查核</span> ➔ 
-            <span class="pipeline-step step-active">3. 依計畫執行採購/活動</span> ➔ 
-            <span class="pipeline-step step-pending">4. 黏存單據送科核銷</span> ➔ 
-            <span class="pipeline-step step-pending">5. 結案撥款</span>
-        </div>
-        <div style="margin-top: 0.8rem; font-size: 0.88rem; color: #15803d;">
-            📌 <strong>申請範例更新提示</strong>：補捐助申請範例將隨時間動態更新，<span style="color:#dc2626;font-weight:700;">更新部分會以顏色做清楚區別</span>，請各分隊務必至系統下載最新版本填報。
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    def _go_to_tab(tab_label):
-        st.session_state["top_main_nav"] = tab_label
-
-    col_go1, col_go2 = st.columns(2)
-    with col_go1:
-        st.button("📌 申請案件注意要點（活動費／設備費）", on_click=_go_to_tab, args=("📌 申請注意要點",),
-                  use_container_width=True, key="go_notes_page")
-    with col_go2:
-        st.button("⚠️ 錯誤樣態歷史案例", on_click=_go_to_tab, args=("⚠️ 錯誤樣態案例",),
-                  use_container_width=True, key="go_cases_page")
-
-    tasks_cat = db.get_tasks_by_filter(category="補捐助業務")
-    st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
-    if not tasks_cat:
-        st.info("目前【補捐助業務】無符合條件的項目。")
-    else:
-        for t in tasks_cat:
-            render_task_card(t)
-
+    render_subsidy_business_tab()
 
 # === 4-1. 申請注意要點 Tab ===
 elif selected_tab == "📌 申請注意要點":
