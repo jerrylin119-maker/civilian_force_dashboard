@@ -9,6 +9,7 @@ database.py - 臺東縣消防局民力運用及訓練科 業務知識動態看�
 """
 
 import sqlite3
+import json
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 import os
@@ -33,6 +34,22 @@ APPLICATION_NOTE_TYPE_TITLES = {
 ERROR_CASE_TYPES = ["活動費", "設備費", "共通／其他"]
 
 # 注意要點初始內容（承辦人提供的範例）。僅在資料表完全沒有資料、且雲端備份也沒有這張表時才會寫入一次。
+# 補捐助業務頁面最上方的「申請流程說明區塊」預設內容（承辦人在網頁上改過之後就改用資料庫裡的版本）。
+# 提示文字標記：**文字** = 粗體、==文字== = 紅色粗體
+SUBSIDY_STEP_STATUSES = ["已完成", "進行中", "未開始"]
+SUBSIDY_BANNER_DEFAULT = {
+    "title": "義消申請補縣府及各鄉鎮公所補捐助案件管理專區",
+    "steps": [
+        {"name": "申請表單與系統登錄", "status": "已完成"},
+        {"name": "資格初審與單據查核", "status": "已完成"},
+        {"name": "依計畫執行採購/活動", "status": "進行中"},
+        {"name": "黏存單據送科核銷", "status": "未開始"},
+        {"name": "結案撥款", "status": "未開始"},
+    ],
+    "hint": ("📌 **申請範例更新提示**：補捐助申請範例將隨時間動態更新，"
+             "==更新部分會以顏色做清楚區別==，請各分隊務必至系統下載最新版本填報。"),
+}
+
 COMPLIANCE_SEED_DATE = "2026-10-13 00:00:00"
 SAMPLE_APPLICATION_NOTES = [
     {
@@ -463,6 +480,16 @@ def init_db(force_reseed=False):
             consequence TEXT,
             correction TEXT,
             created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS SubsidyBanner (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            title TEXT NOT NULL,
+            hint TEXT,
+            steps_json TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
     """)
@@ -1039,6 +1066,12 @@ def search_tasks_for_jump(query_str):
     conn.close()
     return [dict(row) for row in rows]
 
+def _export_subsidy_banner():
+    """匯出自訂過的流程說明區塊；沒自訂過回傳 None（還原時就是回到預設）"""
+    b = get_subsidy_banner()
+    return b if b["updated_at"] else None
+
+
 def get_full_system_data():
     """取得全系統所有資料表之完整資料 (包含業務主表、導航情境表、留言回饋表、系統設定)"""
     init_db()
@@ -1056,6 +1089,7 @@ def get_full_system_data():
         "feedbacks": feedbacks_df.to_dict(orient="records"),
         "application_notes": notes_df.to_dict(orient="records"),
         "error_cases": cases_df.to_dict(orient="records"),
+        "subsidy_banner": _export_subsidy_banner(),
         "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "organization": "臺東縣消防局民力運用及訓練科"
     }
@@ -1268,6 +1302,8 @@ def import_full_system_from_json(json_obj):
         notes=notes_backup if isinstance(notes_backup, list) else None,
         cases=cases_backup if isinstance(cases_backup, list) else None,
     )
+    if "subsidy_banner" in json_obj:
+        _restore_subsidy_banner(cursor, json_obj.get("subsidy_banner"))
     if isinstance(notes_backup, list) or isinstance(cases_backup, list):
         cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('compliance_data_ready', 'true')")
 
@@ -1509,6 +1545,109 @@ def delete_error_case(case_id):
     conn.close()
 
 
+def _banner_from_row(row):
+    try:
+        steps = json.loads(row["steps_json"])
+    except Exception:
+        steps = []
+    return {"title": row["title"], "hint": row["hint"] or "", "steps": steps, "updated_at": row["updated_at"]}
+
+
+def get_subsidy_banner():
+    """取得補捐助業務頁面的流程說明區塊。承辦人還沒改過就回傳預設內容（updated_at 為空字串）。"""
+    init_db()
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM SubsidyBanner WHERE id = 1").fetchone()
+    conn.close()
+    if row:
+        return _banner_from_row(row)
+    return {
+        "title": SUBSIDY_BANNER_DEFAULT["title"],
+        "hint": SUBSIDY_BANNER_DEFAULT["hint"],
+        "steps": [dict(x) for x in SUBSIDY_BANNER_DEFAULT["steps"]],
+        "updated_at": "",
+    }
+
+
+def _clean_banner_steps(steps):
+    cleaned = []
+    for st_ in steps or []:
+        name = str((st_ or {}).get("name", "")).strip()
+        if not name:
+            continue
+        status = (st_ or {}).get("status")
+        cleaned.append({"name": name, "status": status if status in SUBSIDY_STEP_STATUSES else "未開始"})
+    return cleaned
+
+
+def steps_from_editor_records(records):
+    """把網頁表格（順序／步驟名稱／目前狀態）轉成步驟清單：略過沒填名稱的列，依「順序」由小到大排（沒填順序的排最後，同順序維持原本列順序）"""
+    def blank(v):
+        return v is None or (isinstance(v, float) and v != v) or str(v).strip() == ""
+
+    rows = []
+    for idx, rec in enumerate(records or []):
+        name = rec.get("步驟名稱")
+        if blank(name):
+            continue
+        order = rec.get("順序")
+        status = rec.get("目前狀態")
+        rows.append((
+            10 ** 9 if blank(order) else float(order),
+            idx,
+            {"name": str(name).strip(), "status": status if status in SUBSIDY_STEP_STATUSES else "未開始"},
+        ))
+    rows.sort(key=lambda r: (r[0], r[1]))
+    return [r[2] for r in rows]
+
+
+def save_subsidy_banner(title, hint, steps):
+    """儲存流程說明區塊（標題、步驟清單、提示文字），並記錄更新日期"""
+    init_db()
+    conn = get_db_connection()
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO SubsidyBanner (id, title, hint, steps_json, updated_at)
+        VALUES (1, ?, ?, ?, ?)
+        """,
+        (
+            (title or "").strip() or SUBSIDY_BANNER_DEFAULT["title"],
+            (hint or "").strip(),
+            json.dumps(_clean_banner_steps(steps), ensure_ascii=False),
+            _now_tw_str(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def reset_subsidy_banner():
+    """恢復為預設內容（刪除承辦人自訂的版本）"""
+    init_db()
+    conn = get_db_connection()
+    conn.execute("DELETE FROM SubsidyBanner WHERE id = 1")
+    conn.commit()
+    conn.close()
+
+
+def _restore_subsidy_banner(cursor, banner):
+    """用備份資料還原流程說明區塊；banner 為 None 代表備份當時沒有自訂過（回到預設）"""
+    cursor.execute("DELETE FROM SubsidyBanner WHERE id = 1")
+    if isinstance(banner, dict):
+        cursor.execute(
+            """
+            INSERT INTO SubsidyBanner (id, title, hint, steps_json, updated_at)
+            VALUES (1, ?, ?, ?, ?)
+            """,
+            (
+                banner.get("title") or SUBSIDY_BANNER_DEFAULT["title"],
+                banner.get("hint", ""),
+                json.dumps(_clean_banner_steps(banner.get("steps")), ensure_ascii=False),
+                banner.get("updated_at") or _now_tw_str(),
+            ),
+        )
+
+
 def is_compliance_data_ready():
     """兩個新頁面的資料是否已經完成初始化（還原備份或寫入範例）。沒完成通常代表雲端備份暫時讀不到。"""
     init_db()
@@ -1576,7 +1715,10 @@ def ensure_compliance_data_initialized():
     cursor.execute("SELECT COUNT(*) FROM ErrorCases")
     cases_n = cursor.fetchone()[0]
 
-    if notes_n == 0 or cases_n == 0:
+    cursor.execute("SELECT COUNT(*) FROM SubsidyBanner")
+    banner_n = cursor.fetchone()[0]
+
+    if notes_n == 0 or cases_n == 0 or banner_n == 0:
         ok, backup_obj, _err = fetch_backup_public()
         if not ok or not isinstance(backup_obj, dict):
             conn.close()
@@ -1602,6 +1744,8 @@ def ensure_compliance_data_initialized():
                     )
         if cases_n == 0 and isinstance(backup_cases, list):
             _replace_compliance_tables(cursor, cases=backup_cases)
+        if banner_n == 0 and isinstance(backup_obj.get("subsidy_banner"), dict):
+            _restore_subsidy_banner(cursor, backup_obj["subsidy_banner"])
 
     cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('compliance_data_ready', 'true')")
     conn.commit()

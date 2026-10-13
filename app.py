@@ -12,7 +12,7 @@ import database as db
 
 # Streamlit Cloud 重新部署後只會重跑 app.py，已經載入記憶體的 database 模組可能還是舊版
 # （缺少新函式，會造成 AttributeError）。偵測到缺函式時強制重新載入，不必手動 Reboot app。
-if not hasattr(db, "ensure_compliance_data_initialized"):
+if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get_subsidy_banner", "steps_from_editor_records")):
     db = importlib.reload(db)
 
 # 頁面配置
@@ -1050,26 +1050,91 @@ def render_error_cases_page():
                         st.rerun()
 
 
+def _banner_inline_markup(text):
+    """提示文字：先跳脫 HTML（避免亂碼或惡意標籤），再把 **粗體**、==紅色粗體== 標記轉成樣式，換行轉成 <br>"""
+    safe = html.escape(text or "")
+    safe = re.sub(r"==(.+?)==", r'<span style="color:#dc2626;font-weight:700;">\1</span>', safe)
+    safe = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", safe)
+    return safe.replace("\n", "<br>")
+
+
+def render_subsidy_banner():
+    """補捐助業務頁面最上方的流程說明區塊（標題、流程步驟、提示文字，承辦人可在網頁上修改）"""
+    banner = db.get_subsidy_banner()
+    status_class = {"已完成": "step-done", "進行中": "step-active", "未開始": "step-pending"}
+
+    steps_html = ""
+    if banner["steps"]:
+        steps_html = " ➔ ".join(
+            f'<span class="pipeline-step {status_class.get(stp["status"], "step-pending")}">{i}. {html.escape(stp["name"])}</span>'
+            for i, stp in enumerate(banner["steps"], start=1)
+        )
+        steps_html = f'<div style="margin-top: 0.5rem;">{steps_html}</div>'
+    hint_html = ""
+    if banner["hint"].strip():
+        hint_html = (f'<div style="margin-top: 0.8rem; font-size: 0.88rem; color: #15803d;">'
+                     f'{_banner_inline_markup(banner["hint"])}</div>')
+    updated_html = ""
+    if banner["updated_at"]:
+        updated_html = (f'<div style="margin-top:0.6rem;font-size:0.8rem;color:#64748b;text-align:right;">'
+                        f'🕒 更新日期：{_date_only(banner["updated_at"])}</div>')
+
+    st.markdown(
+        f'''
+        <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 1rem 1.2rem; margin-bottom: 1.2rem;">
+            <h4 style="color: #166534; margin-top:0; margin-bottom: 0.5rem;">🎯 {html.escape(banner["title"])}</h4>
+            {steps_html}{hint_html}{updated_html}
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+    if not st.session_state.get("is_admin"):
+        return
+
+    with st.expander("✏️ 【維護模式】編輯這個說明區塊（標題、流程步驟、提示文字）", expanded=False):
+        with st.form("subsidy_banner_form"):
+            e_title = st.text_input("區塊標題", value=banner["title"])
+            st.markdown("**流程步驟**　（直接點格子修改；表格最下面的空白列可新增步驟；"
+                        "勾選列左邊的框後按鍵盤 Delete 可刪除；依「順序」由小到大排列）")
+            steps_df = pd.DataFrame({
+                "順序": list(range(1, len(banner["steps"]) + 1)),
+                "步驟名稱": [x["name"] for x in banner["steps"]],
+                "目前狀態": [x["status"] for x in banner["steps"]],
+            })
+            edited_steps = st.data_editor(
+                steps_df,
+                num_rows="dynamic",
+                hide_index=True,
+                use_container_width=True,
+                key=f"subsidy_banner_steps_{banner['updated_at']}",
+                column_config={
+                    "順序": st.column_config.NumberColumn("順序", min_value=1, step=1, width="small"),
+                    "步驟名稱": st.column_config.TextColumn("步驟名稱（會自動加上編號）", required=True, width="medium"),
+                    "目前狀態": st.column_config.SelectboxColumn("目前狀態", options=db.SUBSIDY_STEP_STATUSES, required=True, default="未開始", width="small"),
+                },
+            )
+            e_hint = st.text_area("提示文字（可留空）", value=banner["hint"], height=100)
+            st.caption("標記寫法：`**文字**` ＝ 粗體；`==文字==` ＝ 紅色粗體；按 Enter 可換行。")
+            if st.form_submit_button("💾 儲存（更新日期會同步更新）", type="primary", use_container_width=True):
+                db.save_subsidy_banner(e_title, e_hint, db.steps_from_editor_records(edited_steps.to_dict("records")))
+                set_flash_message("💾 已更新補捐助業務的流程說明區塊。", icon="🎯")
+                st.rerun()
+
+        if banner["updated_at"]:
+            confirm_reset = st.checkbox("我確認要恢復為系統預設內容（目前自訂的內容會被清除）", key="subsidy_banner_reset_chk")
+            if st.button("🔄 恢復為預設內容", key="subsidy_banner_reset_btn", disabled=not confirm_reset):
+                db.reset_subsidy_banner()
+                set_flash_message("🔄 已恢復為預設的流程說明內容。", icon="🎯")
+                st.rerun()
+
+
 def render_subsidy_business_tab():
     """💰 補捐助業務頁面（主網站與補捐助專區共用）"""
     st.markdown("### 【💰 補捐助業務】")
     st.caption("👤 **科內承辦人**：廖昱翔科員、林威宇小隊長")
     
-    st.markdown("""
-    <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 1rem 1.2rem; margin-bottom: 1.2rem;">
-        <h4 style="color: #166534; margin-top:0; margin-bottom: 0.5rem;">🎯 義消申請補縣府及各鄉鎮公所補捐助案件管理專區</h4>
-        <div style="margin-top: 0.5rem;">
-            <span class="pipeline-step step-done">1. 申請表單與系統登錄</span> ➔ 
-            <span class="pipeline-step step-done">2. 資格初審與單據查核</span> ➔ 
-            <span class="pipeline-step step-active">3. 依計畫執行採購/活動</span> ➔ 
-            <span class="pipeline-step step-pending">4. 黏存單據送科核銷</span> ➔ 
-            <span class="pipeline-step step-pending">5. 結案撥款</span>
-        </div>
-        <div style="margin-top: 0.8rem; font-size: 0.88rem; color: #15803d;">
-            📌 <strong>申請範例更新提示</strong>：補捐助申請範例將隨時間動態更新，<span style="color:#dc2626;font-weight:700;">更新部分會以顏色做清楚區別</span>，請各分隊務必至系統下載最新版本填報。
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    render_subsidy_banner()
 
     def _go_to_tab(tab_label):
         st.session_state["top_main_nav"] = tab_label
