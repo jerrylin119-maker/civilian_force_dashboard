@@ -6,7 +6,7 @@ import html
 import streamlit as st
 import pandas as pd
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import database as db
 
 # 頁面配置
@@ -455,6 +455,15 @@ if "auto_restore_checked" not in st.session_state:
             st.session_state["_startup_restored"] = True
     except Exception:
         pass
+
+# ========== 「申請注意要點」「錯誤樣態案例」兩個頁面的資料初始化（每個 session 只檢查一次）==========
+if "compliance_data_checked" not in st.session_state:
+    st.session_state["compliance_data_checked"] = True
+    try:
+        db.ensure_compliance_data_initialized()
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
 # 系統頂部橫幅
 st.markdown("""
@@ -1061,12 +1070,256 @@ def render_task_card(task):
                     st.rerun()
 
 
+# ==================== 補捐助「申請案件注意要點」「錯誤樣態歷史案例」頁面 ====================
+TW_TZ = timezone(timedelta(hours=8))
+
+
+def _date_only(ts):
+    """'2026-10-13 08:30:00' -> '2026-10-13'"""
+    return str(ts or "")[:10]
+
+
+def _is_recent(ts, days=14):
+    """是否為最近 N 天內新增/更新（用來顯示 🆕 標記）"""
+    try:
+        dt = datetime.strptime(str(ts)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TW_TZ)
+    except Exception:
+        return False
+    return (datetime.now(TW_TZ) - dt).days < days
+
+
+def _latest_update(rows):
+    stamps = [r.get("updated_at") for r in rows if r.get("updated_at")]
+    return _date_only(max(stamps)) if stamps else ""
+
+
+def _new_badge(ts):
+    if not _is_recent(ts):
+        return ""
+    return ("<span style='background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;border-radius:9999px;"
+            "padding:1px 8px;font-size:0.75rem;font-weight:700;margin-left:0.5rem;'>🆕 近期更新</span>")
+
+
+def render_application_notes_page():
+    """📌 補捐助申請案件注意要點（活動費／設備費各自一組，承辦人可隨時新增，並顯示更新日期）"""
+    is_admin_mode = bool(st.session_state.get("is_admin"))
+    all_notes = db.get_application_notes()
+    last_upd = _latest_update(all_notes)
+
+    st.markdown(f"""
+    <div style="background: linear-gradient(to right, #fffbeb, #fff7ed); border: 1px solid #fde68a; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.2rem;">
+        <h3 style="color:#92400e; margin-top:0; margin-bottom:0.4rem;">📌 補捐助申請案件注意要點</h3>
+        <p style="color:#78350f; font-size:0.95rem; margin-bottom:0.6rem;">
+            依申請類型（活動費、設備費）彙整計畫書、概算表及公文審查時的注意事項，會隨申請案件陸續補充，送件前請先逐項對照。
+        </p>
+        <span style="font-size:0.85rem; color:#92400e; background:#fef3c7; border:1px solid #fcd34d; border-radius:9999px; padding:2px 12px;">
+            🕒 最後更新：<strong>{last_upd or '尚無資料'}</strong> &nbsp;|&nbsp; 共 {len(all_notes)} 項
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    type_icons = {"活動費": "🎪", "設備費": "🛠️"}
+    counts = {t: sum(1 for n in all_notes if n["app_type"] == t) for t in db.APPLICATION_NOTE_TYPES}
+    selected_type = st.radio(
+        "申請類型",
+        db.APPLICATION_NOTE_TYPES,
+        horizontal=True,
+        key="notes_type_sel",
+        format_func=lambda t: f"{type_icons.get(t, '')} {t}（{counts.get(t, 0)} 項）",
+        label_visibility="collapsed",
+    )
+
+    type_notes = [n for n in all_notes if n["app_type"] == selected_type]
+    cn_index = ["一", "二", "三", "四", "五"][min(db.APPLICATION_NOTE_TYPES.index(selected_type), 4)]
+    st.markdown(f"#### {cn_index}、{db.APPLICATION_NOTE_TYPE_TITLES.get(selected_type, selected_type)}")
+    st.caption(f"🕒 本類最後更新：{_latest_update(type_notes) or '—'}")
+
+    if is_admin_mode:
+        with st.expander(f"➕ 【維護模式】新增「{selected_type}」注意事項", expanded=False):
+            with st.form(f"add_note_form_{selected_type}", clear_on_submit=True):
+                new_title = st.text_input("注意事項標題 *", placeholder="例：品項名稱適法性（宣導品 vs. 贈品/獎品）")
+                new_content = st.text_area(
+                    "說明內容（每個重點一行，行首可用 * 當項目符號）",
+                    height=180,
+                    placeholder="* 第一個重點說明\n* 第二個重點說明",
+                )
+                new_sort = st.number_input("排序（0＝自動排在最後面）", min_value=0, max_value=999, value=0, step=1)
+                if st.form_submit_button("➕ 新增注意事項", type="primary", use_container_width=True):
+                    if not new_title.strip():
+                        st.error("請輸入注意事項標題！")
+                    else:
+                        db.add_application_note(selected_type, new_title, new_content, sort_order=(new_sort or None))
+                        set_flash_message(f"🎉 已新增「{selected_type}」注意事項【{new_title.strip()}】，更新日期已自動記錄。", icon="📌")
+                        st.rerun()
+
+    if not all_notes and not db.is_compliance_data_ready():
+        st.warning("⚠️ 雲端備份資料暫時無法讀取，為避免覆蓋既有內容，目前先不顯示範例資料。請稍後重新整理頁面再試一次。")
+    elif not type_notes:
+        st.info(f"目前「{selected_type}」尚無注意事項。" + ("可使用上方【維護模式】表單新增。" if is_admin_mode else ""))
+
+    for n_idx, note in enumerate(type_notes, start=1):
+        with st.container(border=True):
+            st.markdown(
+                f"""
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0.4rem;">
+                    <div>
+                        <span style="background:#2563eb;color:#fff;border-radius:6px;padding:1px 9px;font-weight:700;margin-right:0.5rem;">{n_idx}</span>
+                        <span style="font-size:1.1rem;font-weight:700;color:#1e293b;">{html.escape(note['title'])}</span>{_new_badge(note['updated_at'])}
+                    </div>
+                    <div style="font-size:0.85rem;color:#64748b;">🕒 更新日期：<strong>{_date_only(note['updated_at'])}</strong></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if note.get("content") and note["content"].strip():
+                st.markdown(format_sop_content_smart(note["content"]))
+            else:
+                st.caption("（尚無詳細說明）")
+
+            if is_admin_mode:
+                with st.expander(f"✏️ 【維護模式】編輯／刪除（ID #{note['id']}）", expanded=False):
+                    with st.form(f"edit_note_form_{note['id']}"):
+                        t_idx = db.APPLICATION_NOTE_TYPES.index(note["app_type"]) if note["app_type"] in db.APPLICATION_NOTE_TYPES else 0
+                        e_type = st.selectbox("申請類型", db.APPLICATION_NOTE_TYPES, index=t_idx, key=f"note_type_{note['id']}")
+                        e_title = st.text_input("標題 *", value=note["title"], key=f"note_title_{note['id']}")
+                        e_content = st.text_area("說明內容", value=note["content"] or "", height=180, key=f"note_content_{note['id']}")
+                        e_sort = st.number_input("排序（數字小的排前面）", min_value=0, max_value=999, value=int(note["sort_order"]), step=1, key=f"note_sort_{note['id']}")
+                        if st.form_submit_button("💾 儲存修改（更新日期會同步更新）", type="primary", use_container_width=True):
+                            if not e_title.strip():
+                                st.error("標題不可為空白！")
+                            else:
+                                db.update_application_note(note["id"], e_type, e_title, e_content, e_sort)
+                                set_flash_message(f"💾 已更新注意事項【{e_title.strip()}】。", icon="📌")
+                                st.rerun()
+                    confirm_del = st.checkbox("我確認要永久刪除這則注意事項", key=f"note_del_chk_{note['id']}")
+                    if st.button("🗑️ 刪除這則注意事項", key=f"note_del_btn_{note['id']}", disabled=not confirm_del):
+                        db.delete_application_note(note["id"])
+                        set_flash_message(f"🗑️ 已刪除注意事項【{note['title']}】。", msg_type="warning", icon="🗑️")
+                        st.rerun()
+
+
+def render_error_cases_page():
+    """⚠️ 補捐助錯誤樣態歷史案例（承辦人可隨時登打新案例，並顯示更新日期）"""
+    is_admin_mode = bool(st.session_state.get("is_admin"))
+    all_cases = db.get_error_cases()
+    last_upd = _latest_update(all_cases)
+
+    st.markdown(f"""
+    <div style="background: linear-gradient(to right, #fef2f2, #fff1f2); border: 1px solid #fecaca; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.2rem;">
+        <h3 style="color:#991b1b; margin-top:0; margin-bottom:0.4rem;">⚠️ 補捐助錯誤樣態歷史案例</h3>
+        <p style="color:#7f1d1d; font-size:0.95rem; margin-bottom:0.6rem;">
+            彙整過去補捐助申請、審查、核銷曾發生的錯誤樣態與改善做法，供各分隊填報前比對，避免重複發生相同的退件或糾正。
+        </p>
+        <span style="font-size:0.85rem; color:#991b1b; background:#fee2e2; border:1px solid #fca5a5; border-radius:9999px; padding:2px 12px;">
+            🕒 最後更新：<strong>{last_upd or '尚無資料'}</strong> &nbsp;|&nbsp; 共 {len(all_cases)} 則案例
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_f1, col_f2 = st.columns([2, 3])
+    with col_f1:
+        f_type = st.selectbox("申請類型", ["全部類型"] + db.ERROR_CASE_TYPES, key="case_type_filter")
+    with col_f2:
+        f_kw = st.text_input("關鍵字搜尋", placeholder="標題、年度、錯誤說明、改善做法…", key="case_kw_filter")
+
+    if is_admin_mode:
+        with st.expander("➕ 【維護模式】新增錯誤樣態案例", expanded=False):
+            with st.form("add_case_form", clear_on_submit=True):
+                col_a1, col_a2, col_a3 = st.columns([4, 2, 2])
+                with col_a1:
+                    c_title = st.text_input("案例標題 / 錯誤樣態 *", placeholder="例：計畫書與概算表品項名稱不一致")
+                with col_a2:
+                    c_type = st.selectbox("申請類型 *", db.ERROR_CASE_TYPES)
+                with col_a3:
+                    c_year = st.text_input("發生年度（選填）", placeholder="例：114 年度")
+                c_desc = st.text_area("❌ 錯誤樣態說明", height=110, placeholder="發生了什麼狀況？")
+                c_cons = st.text_area("⚠️ 審查意見／造成的問題（選填）", height=80, placeholder="例：遭審核單位退件、要求補正…")
+                c_fix = st.text_area("✅ 正確做法／改善建議", height=110, placeholder="下次應如何避免？")
+                if st.form_submit_button("➕ 新增案例", type="primary", use_container_width=True):
+                    if not c_title.strip():
+                        st.error("請輸入案例標題！")
+                    else:
+                        db.add_error_case(c_type, c_title, c_year, c_desc, c_cons, c_fix)
+                        set_flash_message(f"🎉 已新增錯誤樣態案例【{c_title.strip()}】，更新日期已自動記錄。", icon="⚠️")
+                        st.rerun()
+
+    cases = db.get_error_cases(app_type=None if f_type == "全部類型" else f_type, keyword=f_kw)
+    st.caption(f"符合條件 **{len(cases)}** 則 / 全部 {len(all_cases)} 則（依更新日期由新到舊排列）")
+
+    if not all_cases and not db.is_compliance_data_ready():
+        st.warning("⚠️ 雲端備份資料暫時無法讀取，為避免覆蓋既有內容，目前先不顯示案例資料。請稍後重新整理頁面再試一次。")
+    elif not all_cases:
+        st.info("目前尚無錯誤樣態案例。" + ("可使用上方【維護模式】表單登打第一則案例。" if is_admin_mode else ""))
+    elif not cases:
+        st.info("沒有符合篩選條件的案例。")
+
+    type_colors = {
+        "活動費": ("#dbeafe", "#1d4ed8"),
+        "設備費": ("#ffedd5", "#c2410c"),
+        "共通／其他": ("#ede9fe", "#5b21b6"),
+    }
+    for case in cases:
+        bg, fg = type_colors.get(case["app_type"], ("#f1f5f9", "#475569"))
+        year_html = (f"<span style='background:#f1f5f9;color:#475569;border-radius:6px;padding:1px 8px;"
+                     f"font-size:0.8rem;margin-right:0.4rem;'>📅 {html.escape(case['case_year'])}</span>") if case.get("case_year") else ""
+        with st.container(border=True):
+            st.markdown(
+                f"""
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0.4rem;">
+                    <div>
+                        <span style="background:{bg};color:{fg};border-radius:6px;padding:1px 9px;font-weight:700;font-size:0.82rem;margin-right:0.4rem;">{html.escape(case['app_type'])}</span>{year_html}
+                        <span style="font-size:1.1rem;font-weight:700;color:#1e293b;">{html.escape(case['title'])}</span>{_new_badge(case['updated_at'])}
+                    </div>
+                    <div style="font-size:0.85rem;color:#64748b;">🕒 更新日期：<strong>{_date_only(case['updated_at'])}</strong></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if case.get("description") and case["description"].strip():
+                st.markdown("**❌ 錯誤樣態**")
+                st.markdown(format_sop_content_smart(case["description"]))
+            if case.get("consequence") and case["consequence"].strip():
+                st.markdown("**⚠️ 審查意見／造成的問題**")
+                st.markdown(format_sop_content_smart(case["consequence"]))
+            if case.get("correction") and case["correction"].strip():
+                st.success("**✅ 正確做法／改善建議**\n\n" + format_sop_content_smart(case["correction"]))
+
+            if is_admin_mode:
+                with st.expander(f"✏️ 【維護模式】編輯／刪除（ID #{case['id']}）", expanded=False):
+                    with st.form(f"edit_case_form_{case['id']}"):
+                        col_e1, col_e2, col_e3 = st.columns([4, 2, 2])
+                        with col_e1:
+                            e_title = st.text_input("案例標題 *", value=case["title"], key=f"case_title_{case['id']}")
+                        with col_e2:
+                            t_idx = db.ERROR_CASE_TYPES.index(case["app_type"]) if case["app_type"] in db.ERROR_CASE_TYPES else 0
+                            e_type = st.selectbox("申請類型", db.ERROR_CASE_TYPES, index=t_idx, key=f"case_type_{case['id']}")
+                        with col_e3:
+                            e_year = st.text_input("發生年度", value=case["case_year"] or "", key=f"case_year_{case['id']}")
+                        e_desc = st.text_area("❌ 錯誤樣態說明", value=case["description"] or "", height=110, key=f"case_desc_{case['id']}")
+                        e_cons = st.text_area("⚠️ 審查意見／造成的問題", value=case["consequence"] or "", height=80, key=f"case_cons_{case['id']}")
+                        e_fix = st.text_area("✅ 正確做法／改善建議", value=case["correction"] or "", height=110, key=f"case_fix_{case['id']}")
+                        if st.form_submit_button("💾 儲存修改（更新日期會同步更新）", type="primary", use_container_width=True):
+                            if not e_title.strip():
+                                st.error("案例標題不可為空白！")
+                            else:
+                                db.update_error_case(case["id"], e_type, e_title, e_year, e_desc, e_cons, e_fix)
+                                set_flash_message(f"💾 已更新案例【{e_title.strip()}】。", icon="⚠️")
+                                st.rerun()
+                    confirm_del = st.checkbox("我確認要永久刪除這則案例", key=f"case_del_chk_{case['id']}")
+                    if st.button("🗑️ 刪除這則案例", key=f"case_del_btn_{case['id']}", disabled=not confirm_del):
+                        db.delete_error_case(case["id"])
+                        set_flash_message(f"🗑️ 已刪除案例【{case['title']}】。", msg_type="warning", icon="🗑️")
+                        st.rerun()
+
+
 # ==================== 頂部主導覽標籤列 (支援程式化切換與點選) ====================
 tab_names = [
     "🎖️ 專業義消承辦人",
     "🚒 義消業務",
     "🎁 義消福利",
     "💰 補捐助業務",
+    "📌 申請注意要點",
+    "⚠️ 錯誤樣態案例",
     "🎯 訓練業務",
     "🌟 其他推動業務",
     "💬 我有話要說"
@@ -1205,6 +1458,17 @@ elif selected_tab == "💰 補捐助業務":
     </div>
     """, unsafe_allow_html=True)
 
+    def _go_to_tab(tab_label):
+        st.session_state["top_main_nav"] = tab_label
+
+    col_go1, col_go2 = st.columns(2)
+    with col_go1:
+        st.button("📌 申請案件注意要點（活動費／設備費）", on_click=_go_to_tab, args=("📌 申請注意要點",),
+                  use_container_width=True, key="go_notes_page")
+    with col_go2:
+        st.button("⚠️ 錯誤樣態歷史案例", on_click=_go_to_tab, args=("⚠️ 錯誤樣態案例",),
+                  use_container_width=True, key="go_cases_page")
+
     tasks_cat = db.get_tasks_by_filter(category="補捐助業務")
     st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
     if not tasks_cat:
@@ -1212,6 +1476,16 @@ elif selected_tab == "💰 補捐助業務":
     else:
         for t in tasks_cat:
             render_task_card(t)
+
+
+# === 4-1. 申請注意要點 Tab ===
+elif selected_tab == "📌 申請注意要點":
+    render_application_notes_page()
+
+
+# === 4-2. 錯誤樣態案例 Tab ===
+elif selected_tab == "⚠️ 錯誤樣態案例":
+    render_error_cases_page()
 
 
 # === 5. 訓練業務 Tab ===
@@ -1700,7 +1974,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
 
         # 區塊 0: GitHub 雲端一鍵備份與還原
         st.markdown("##### ☁️ 0. GitHub 雲端一鍵備份與還原")
-        st.caption("將全系統資料（業務、情境、留言、交辦事項）推送至 GitHub 倉庫作為永久雲端備份。伺服器重啟後會**自動從雲端還原**。")
+        st.caption("將全系統資料（業務、情境、留言、交辦事項、申請注意要點、錯誤樣態案例）推送至 GitHub 倉庫作為永久雲端備份。伺服器重啟後會**自動從雲端還原**。**新增或修改資料後，記得按一次「一鍵上傳至雲端備份」，資料才不會在重啟後遺失。**")
 
         GITHUB_OWNER = "jerrylin119-maker"
         GITHUB_REPO = "civilian_force_dashboard"
@@ -1714,9 +1988,11 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                     _at_cnt   = len(_bobj.get("assigned_tasks", []))
                     _g_cnt    = len(_bobj.get("guides", []))
                     _f_cnt    = len(_bobj.get("feedbacks", []))
+                    _n_cnt    = len(_bobj.get("application_notes", []))
+                    _c_cnt    = len(_bobj.get("error_cases", []))
                     st.session_state["cloud_backup_info"] = {
                         "time": _bobj.get("backup_created_at", "（時間不明）"),
-                        "summary": f"{_task_cnt} 筆業務 | {_g_cnt} 情境 | {_f_cnt} 留言 | {_at_cnt} 交辦事項"
+                        "summary": f"{_task_cnt} 筆業務 | {_g_cnt} 情境 | {_f_cnt} 留言 | {_at_cnt} 交辦事項 | {_n_cnt} 注意要點 | {_c_cnt} 錯誤案例"
                     }
                 else:
                     st.session_state["cloud_backup_info"] = None
@@ -1850,6 +2126,24 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                 label="💬 下載【我有話要說留言】(CSV)",
                 data=csv_fbs_bytes,
                 file_name=f"ttfd_feedbacks_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+        col_exp5, col_exp6, _col_pad1, _col_pad2 = st.columns(4)
+        with col_exp5:
+            st.download_button(
+                label="📌 下載【申請注意要點】(CSV)",
+                data=pd.DataFrame(db.get_application_notes()).to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                file_name=f"ttfd_application_notes_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        with col_exp6:
+            st.download_button(
+                label="⚠️ 下載【錯誤樣態案例】(CSV)",
+                data=pd.DataFrame(db.get_error_cases()).to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                file_name=f"ttfd_error_cases_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
                 use_container_width=True
             )

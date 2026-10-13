@@ -10,7 +10,7 @@ database.py - 臺東縣消防局民力訓練科 業務知識動態看板 資料�
 
 import sqlite3
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import os
 import re
 
@@ -23,6 +23,62 @@ DEFAULT_OFFICERS = ["廖昱翔科員、林威宇小隊長", "廖昱翔科員", "
 
 FEEDBACK_CATEGORIES = ["義消業務", "義消福利", "補捐助案件", "訓練業務", "系統建議", "其他問題"]
 FEEDBACK_STATUSES = ["待處理", "處理中", "已回覆", "列入參考"]
+
+# 補捐助「申請案件注意要點」「錯誤樣態歷史案例」兩個功能頁面使用
+APPLICATION_NOTE_TYPES = ["活動費", "設備費"]
+APPLICATION_NOTE_TYPE_TITLES = {
+    "活動費": "活動類計畫與經費編列原則",
+    "設備費": "設備類購置與財產登記標準",
+}
+ERROR_CASE_TYPES = ["活動費", "設備費", "共通／其他"]
+
+# 注意要點初始內容（承辦人提供的範例）。僅在資料表完全沒有資料、且雲端備份也沒有這張表時才會寫入一次。
+COMPLIANCE_SEED_DATE = "2026-10-13 00:00:00"
+SAMPLE_APPLICATION_NOTES = [
+    {
+        "app_type": "活動費",
+        "title": "品項名稱適法性（宣導品 vs. 贈品/獎品）",
+        "content": (
+            "* 經費項目應使用合適名稱，避免使用「贈品」以符合規定。若有發放需求，建議依性質列為「宣導品」；若為有獎徵答則列為「獎品」。\n"
+            "* 宣導品的合理性：項目需與活動目的、對象相符（例如結合消防意象的宣導品或文具用品），"
+            "避免編列容易引發爭議或受法規限制的品項（如整盒雞蛋、食品/飲品）。"
+        ),
+    },
+    {
+        "app_type": "活動費",
+        "title": "計畫書與概算表、公文前後一致性",
+        "content": (
+            "* 計畫名稱、內容、性質必須與概算表項目完全對應。\n"
+            "* 特殊活動器材（如演習用的「報廢車輛」搶救訓練），在計畫書及公文中應清楚敘明為"
+            "「訓練教材/教具/租賃耗材」及用途，避免被審計或審核單位誤解為各分隊重複購置報廢車輛。"
+        ),
+    },
+    {
+        "app_type": "活動費",
+        "title": "便當、活動耗材等合理性說明",
+        "content": (
+            "* 名冊人數需與便當/物品數量合理對應（例如工作人員名冊若為 30 人，便當不應無故暴增至 100 多份，"
+            "需於備註欄清楚註明數量來源與用途）。\n"
+            "* 文具等耗材需確實為活動所需，且於備註欄詳細敘明用途與關聯性。"
+        ),
+    },
+    {
+        "app_type": "活動費",
+        "title": "內部公文與外發計畫之區隔",
+        "content": (
+            "* 機關內部簽呈的敘獎規範等內部事項，外發公文或送審計畫書中應予以抽換或分開處理，"
+            "避免造成中央或審計審核上的疑慮。"
+        ),
+    },
+    {
+        "app_type": "設備費",
+        "title": "以「辦公設備」為主要原則",
+        "content": (
+            "* 補助款設備原則上以辦公設備為主。個人裝備（如衣服、鞋帽、個人繩索）原則上不合規定；"
+            "較高階救災器材需有充分必要性評估與詳細計畫說明。"
+        ),
+    },
+]
 
 # 臺東縣消防局全轄外勤大隊與分隊清單
 TAITUNG_UNITS = [
@@ -382,6 +438,32 @@ def init_db(force_reseed=False):
             admin_reply TEXT,
             created_at TEXT NOT NULL,
             replied_at TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ApplicationNotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            app_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ErrorCases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            app_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            case_year TEXT,
+            description TEXT,
+            consequence TEXT,
+            correction TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
     """)
     conn.commit()
@@ -964,12 +1046,16 @@ def get_full_system_data():
     tasks_df = pd.read_sql_query("SELECT * FROM TaskDatabase ORDER BY id ASC", conn)
     guides_df = pd.read_sql_query("SELECT * FROM GuideDatabase ORDER BY id ASC", conn)
     feedbacks_df = pd.read_sql_query("SELECT * FROM FeedbackDatabase ORDER BY id ASC", conn)
+    notes_df = pd.read_sql_query("SELECT * FROM ApplicationNotes ORDER BY id ASC", conn)
+    cases_df = pd.read_sql_query("SELECT * FROM ErrorCases ORDER BY id ASC", conn)
     conn.close()
-    
+
     return {
         "tasks": tasks_df.to_dict(orient="records"),
         "guides": guides_df.to_dict(orient="records"),
         "feedbacks": feedbacks_df.to_dict(orient="records"),
+        "application_notes": notes_df.to_dict(orient="records"),
+        "error_cases": cases_df.to_dict(orient="records"),
         "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "organization": "臺東縣消防局民力訓練科"
     }
@@ -1173,11 +1259,25 @@ def import_full_system_from_json(json_obj):
                 fb.get("created_at", "")
             ))
             f_count += 1
-            
+
+    # 4. 還原「申請案件注意要點」「錯誤樣態歷史案例」（舊版備份沒有這兩張表時維持現狀不動）
+    notes_backup = json_obj.get("application_notes")
+    cases_backup = json_obj.get("error_cases")
+    n_count, c_count = _replace_compliance_tables(
+        cursor,
+        notes=notes_backup if isinstance(notes_backup, list) else None,
+        cases=cases_backup if isinstance(cases_backup, list) else None,
+    )
+    if isinstance(notes_backup, list) or isinstance(cases_backup, list):
+        cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('compliance_data_ready', 'true')")
+
     conn.commit()
     conn.close()
-    
-    return True, f"已成功還原：{t_count} 筆業務、{g_count} 筆情境導航、{f_count} 筆同仁留言紀錄！"
+
+    extra = ""
+    if isinstance(notes_backup, list) or isinstance(cases_backup, list):
+        extra = f"、{n_count} 筆申請注意要點、{c_count} 筆錯誤樣態案例"
+    return True, f"已成功還原：{t_count} 筆業務、{g_count} 筆情境導航、{f_count} 筆同仁留言紀錄{extra}！"
 
 def get_top_latest_highlights(limit=3):
     """取得最新更新且具異動重點的前 N 項業務公告 (採用 Python 毫秒精準時間解析與排序)"""
@@ -1269,6 +1369,246 @@ def delete_assigned_task(task_id):
     conn.close()
 
 
+# ==================== 補捐助「申請案件注意要點」「錯誤樣態歷史案例」 ====================
+
+def _now_tw_str():
+    """台灣時間（UTC+8）字串；Streamlit Cloud 伺服器是 UTC，直接用 datetime.now() 會差 8 小時。"""
+    return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def get_application_notes(app_type=None):
+    """取得申請案件注意要點（可依申請類型篩選），依排序、建立順序排列"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if app_type:
+        cursor.execute(
+            "SELECT * FROM ApplicationNotes WHERE app_type = ? ORDER BY sort_order ASC, id ASC",
+            (app_type,),
+        )
+    else:
+        cursor.execute("SELECT * FROM ApplicationNotes ORDER BY app_type ASC, sort_order ASC, id ASC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def add_application_note(app_type, title, content, sort_order=None):
+    """新增一筆注意要點；未指定排序時自動排在該類型最後面"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if sort_order is None:
+        cursor.execute("SELECT COALESCE(MAX(sort_order), 0) FROM ApplicationNotes WHERE app_type = ?", (app_type,))
+        sort_order = cursor.fetchone()[0] + 1
+    now_str = _now_tw_str()
+    cursor.execute(
+        """
+        INSERT INTO ApplicationNotes (app_type, title, content, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (app_type, title.strip(), (content or "").strip(), int(sort_order), now_str, now_str),
+    )
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return new_id
+
+
+def update_application_note(note_id, app_type, title, content, sort_order):
+    """更新一筆注意要點（會同步更新「更新日期」）"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE ApplicationNotes SET
+            app_type = ?, title = ?, content = ?, sort_order = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (app_type, title.strip(), (content or "").strip(), int(sort_order), _now_tw_str(), note_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_application_note(note_id):
+    init_db()
+    conn = get_db_connection()
+    conn.execute("DELETE FROM ApplicationNotes WHERE id = ?", (note_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_error_cases(app_type=None, keyword=None):
+    """取得錯誤樣態歷史案例（可依申請類型、關鍵字篩選），最近更新的排最前面"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    sql = "SELECT * FROM ErrorCases WHERE 1=1"
+    params = []
+    if app_type:
+        sql += " AND app_type = ?"
+        params.append(app_type)
+    if keyword and keyword.strip():
+        like = f"%{keyword.strip()}%"
+        sql += " AND (title LIKE ? OR case_year LIKE ? OR description LIKE ? OR consequence LIKE ? OR correction LIKE ?)"
+        params.extend([like] * 5)
+    sql += " ORDER BY updated_at DESC, id DESC"
+    cursor.execute(sql, params)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def add_error_case(app_type, title, case_year, description, consequence, correction):
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now_str = _now_tw_str()
+    cursor.execute(
+        """
+        INSERT INTO ErrorCases (app_type, title, case_year, description, consequence, correction, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_type, title.strip(), (case_year or "").strip(), (description or "").strip(),
+            (consequence or "").strip(), (correction or "").strip(), now_str, now_str,
+        ),
+    )
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return new_id
+
+
+def update_error_case(case_id, app_type, title, case_year, description, consequence, correction):
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE ErrorCases SET
+            app_type = ?, title = ?, case_year = ?, description = ?, consequence = ?, correction = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            app_type, title.strip(), (case_year or "").strip(), (description or "").strip(),
+            (consequence or "").strip(), (correction or "").strip(), _now_tw_str(), case_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_error_case(case_id):
+    init_db()
+    conn = get_db_connection()
+    conn.execute("DELETE FROM ErrorCases WHERE id = ?", (case_id,))
+    conn.commit()
+    conn.close()
+
+
+def is_compliance_data_ready():
+    """兩個新頁面的資料是否已經完成初始化（還原備份或寫入範例）。沒完成通常代表雲端備份暫時讀不到。"""
+    init_db()
+    conn = get_db_connection()
+    row = conn.execute("SELECT value FROM SystemMeta WHERE key = 'compliance_data_ready'").fetchone()
+    conn.close()
+    return bool(row)
+
+
+def _replace_compliance_tables(cursor, notes=None, cases=None):
+    """用備份資料整批覆蓋兩張新資料表（None 代表備份沒有這張表，維持原狀不動）。回傳 (筆數, 筆數)。"""
+    n_count = c_count = 0
+    if notes is not None:
+        cursor.execute("DELETE FROM ApplicationNotes")
+        for i, n in enumerate(notes, start=1):
+            created = n.get("created_at") or _now_tw_str()
+            cursor.execute(
+                """
+                INSERT INTO ApplicationNotes (app_type, title, content, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    n.get("app_type", "活動費"), n.get("title", ""), n.get("content", ""),
+                    n.get("sort_order", i), created, n.get("updated_at") or created,
+                ),
+            )
+            n_count += 1
+    if cases is not None:
+        cursor.execute("DELETE FROM ErrorCases")
+        for c in cases:
+            created = c.get("created_at") or _now_tw_str()
+            cursor.execute(
+                """
+                INSERT INTO ErrorCases (app_type, title, case_year, description, consequence, correction, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    c.get("app_type", "共通／其他"), c.get("title", ""), c.get("case_year", ""),
+                    c.get("description", ""), c.get("consequence", ""), c.get("correction", ""),
+                    created, c.get("updated_at") or created,
+                ),
+            )
+            c_count += 1
+    return n_count, c_count
+
+
+def ensure_compliance_data_initialized():
+    """兩個新頁面（申請注意要點／錯誤樣態案例）的資料初始化，每個伺服器生命週期只會做一次。
+
+    Streamlit Cloud 重啟後 SQLite 會回到 git 裡那份舊檔（沒有這兩張表的資料），所以要先看雲端備份：
+    - 備份裡有這張表（即使是空的）→ 以備份為準還原（承辦人刻意刪光的資料不會被範例蓋回來）
+    - 備份裡完全沒有這張表（功能剛上線、還沒備份過）→ 才寫入初始範例（注意要點）
+    - 連備份都抓不到（網路暫時失敗）→ 先不處理，下次開啟時再試，避免把舊範例蓋掉真實資料
+    """
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM SystemMeta WHERE key = 'compliance_data_ready'")
+    if cursor.fetchone():
+        conn.close()
+        return False
+
+    cursor.execute("SELECT COUNT(*) FROM ApplicationNotes")
+    notes_n = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM ErrorCases")
+    cases_n = cursor.fetchone()[0]
+
+    if notes_n == 0 or cases_n == 0:
+        ok, backup_obj, _err = fetch_backup_public()
+        if not ok or not isinstance(backup_obj, dict):
+            conn.close()
+            return False
+
+        backup_notes = backup_obj.get("application_notes")
+        backup_cases = backup_obj.get("error_cases")
+
+        if notes_n == 0:
+            if isinstance(backup_notes, list):
+                _replace_compliance_tables(cursor, notes=backup_notes)
+            else:
+                per_type_order = {}
+                for s in SAMPLE_APPLICATION_NOTES:
+                    per_type_order[s["app_type"]] = per_type_order.get(s["app_type"], 0) + 1
+                    cursor.execute(
+                        """
+                        INSERT INTO ApplicationNotes (app_type, title, content, sort_order, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (s["app_type"], s["title"], s["content"], per_type_order[s["app_type"]],
+                         COMPLIANCE_SEED_DATE, COMPLIANCE_SEED_DATE),
+                    )
+        if cases_n == 0 and isinstance(backup_cases, list):
+            _replace_compliance_tables(cursor, cases=backup_cases)
+
+    cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('compliance_data_ready', 'true')")
+    conn.commit()
+    conn.close()
+    return True
+
+
 def save_github_pat(pat):
     """儲存 GitHub PAT 至 SystemMeta (僅本機，不會推送到 GitHub)"""
     init_db()
@@ -1340,7 +1680,8 @@ def push_full_backup_to_github(owner, repo, pat, branch="main", backup_path="clo
         sha = None
 
     task_cnt = len(full_data.get("tasks", []))
-    summary = f"{task_cnt} 筆業務 | {len(full_data.get('guides', []))} 情境 | {len(full_data.get('feedbacks', []))} 留言 | {len(assigned)} 交辦事項"
+    summary = (f"{task_cnt} 筆業務 | {len(full_data.get('guides', []))} 情境 | {len(full_data.get('feedbacks', []))} 留言 | "
+               f"{len(assigned)} 交辦事項 | {len(full_data.get('application_notes', []))} 注意要點 | {len(full_data.get('error_cases', []))} 錯誤案例")
     push_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
     commit_msg = f"chore: 自動備份民力訓練科業務資料 ({push_time} 台灣時間)"
 
@@ -1470,7 +1811,9 @@ def auto_restore_on_startup():
         summary = (f"{task_cnt} 筆業務 | "
                    f"{len(backup_obj.get('guides', []))} 情境 | "
                    f"{len(backup_obj.get('feedbacks', []))} 留言 | "
-                   f"{len(backup_obj.get('assigned_tasks', []))} 交辦事項")
+                   f"{len(backup_obj.get('assigned_tasks', []))} 交辦事項 | "
+                   f"{len(backup_obj.get('application_notes', []))} 注意要點 | "
+                   f"{len(backup_obj.get('error_cases', []))} 錯誤案例")
         c2.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('last_cloud_push_time', ?)", (push_time,))
         c2.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('last_cloud_push_summary', ?)", (summary,))
         conn2.commit()
