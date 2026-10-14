@@ -1689,7 +1689,11 @@ def ensure_content_packs():
     conn = get_db_connection()
     cursor = conn.cursor()
     applied = _get_applied_packs(cursor)
-    if _sc.PACK_ID in applied:
+    packs = getattr(_sc, "PACKS", None) or [
+        {"id": _sc.PACK_ID, "date": _sc.PACK_DATE, "notes": _sc.NOTES, "cases": _sc.CASES}
+    ]
+    pending = [p for p in packs if p["id"] not in applied]
+    if not pending:
         conn.close()
         return False
 
@@ -1697,32 +1701,34 @@ def ensure_content_packs():
     next_sort = {
         t: m for t, m in cursor.execute("SELECT app_type, COALESCE(MAX(sort_order), 0) FROM ApplicationNotes GROUP BY app_type")
     }
-    for n in _sc.NOTES:
-        if (n["app_type"], n["title"]) in existing_notes:
-            continue
-        next_sort[n["app_type"]] = next_sort.get(n["app_type"], 0) + 1
-        cursor.execute(
-            """
-            INSERT INTO ApplicationNotes (app_type, title, content, sort_order, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (n["app_type"], n["title"], n["content"], next_sort[n["app_type"]], _sc.PACK_DATE, _sc.PACK_DATE),
-        )
-
     existing_cases = {r[0] for r in cursor.execute("SELECT title FROM ErrorCases")}
-    for c in _sc.CASES:
-        if c["title"] in existing_cases:
-            continue
-        cursor.execute(
-            """
-            INSERT INTO ErrorCases (app_type, title, case_year, description, consequence, correction, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (c["app_type"], c["title"], c.get("case_year", ""), c["description"], c["consequence"],
-             c["correction"], _sc.PACK_DATE, _sc.PACK_DATE),
-        )
+    for pack in pending:
+        for n in pack["notes"]:
+            if (n["app_type"], n["title"]) in existing_notes:
+                continue
+            existing_notes.add((n["app_type"], n["title"]))
+            next_sort[n["app_type"]] = next_sort.get(n["app_type"], 0) + 1
+            cursor.execute(
+                """
+                INSERT INTO ApplicationNotes (app_type, title, content, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (n["app_type"], n["title"], n["content"], next_sort[n["app_type"]], pack["date"], pack["date"]),
+            )
+        for c in pack["cases"]:
+            if c["title"] in existing_cases:
+                continue
+            existing_cases.add(c["title"])
+            cursor.execute(
+                """
+                INSERT INTO ErrorCases (app_type, title, case_year, description, consequence, correction, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (c["app_type"], c["title"], c.get("case_year", ""), c["description"], c["consequence"],
+                 c["correction"], pack["date"], pack["date"]),
+            )
 
-    _set_applied_packs(cursor, applied + [_sc.PACK_ID])
+    _set_applied_packs(cursor, applied + [p["id"] for p in pending])
     conn.commit()
     conn.close()
     return True

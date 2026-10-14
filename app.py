@@ -13,6 +13,10 @@ import subsidy_content as sc
 
 # Streamlit Cloud 重新部署後只會重跑 app.py，已經載入記憶體的 database 模組可能還是舊版
 # （缺少新函式，會造成 AttributeError）。偵測到缺函式時強制重新載入，不必手動 Reboot app。
+if not hasattr(sc, "PACKS"):
+    sc = importlib.reload(sc)
+    if hasattr(db, "_sc"):
+        db._sc = sc
 if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get_subsidy_banner", "steps_from_editor_records", "ensure_content_packs")):
     db = importlib.reload(db)
 
@@ -1206,6 +1210,145 @@ def render_subsidy_banner():
                 st.rerun()
 
 
+def render_settlement_check_page():
+    """✅ 核銷自我檢核：分隊在送大隊初審前，先自行檢查收支清單金額與核銷文件是否齊全。
+
+    所有輸入只留在目前這個瀏覽器分頁的記憶體中，不寫入資料庫、不上傳。
+    """
+    import subsidy_check as chk
+
+    st.markdown("""
+    <div style="background: linear-gradient(to right, #f0fdf4, #ecfdf5); border: 1px solid #bbf7d0; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.2rem;">
+        <h3 style="color:#166534; margin-top:0; margin-bottom:0.4rem;">✅ 核銷自我檢核</h3>
+        <p style="color:#14532d; font-size:0.95rem; margin-bottom:0.4rem;">
+            送大隊初審前，先自己檢查一次：①收支清單的金額有沒有違反補助比例規定、②核銷文件有沒有備齊。
+            規則與大隊「建議補助款【核銷案】初審檢核表」一致。
+        </p>
+        <span style="font-size:0.85rem; color:#166534; background:#dcfce7; border:1px solid #86efac; border-radius:9999px; padding:2px 12px;">
+            🔒 輸入的資料只在這個網頁暫時計算，不會儲存或上傳
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # radio 離開頁面時 Streamlit 會清掉元件狀態，所以另外用一個普通的 session_state 記住選項，
+    # 以 index 還原，避免畫面上顯示的選項和實際內容不一致。
+    _modes = ["💰 收支清單金額檢核", "📋 核銷文件檢核"]
+    mode = st.radio("檢核項目", _modes, horizontal=True, label_visibility="collapsed",
+                    index=_modes.index(st.session_state.get("settle_mode_saved", _modes[0])),
+                    key="settle_mode_widget")
+    st.session_state["settle_mode_saved"] = mode
+
+    if mode == "💰 收支清單金額檢核":
+        sample_rows = [
+            {"項目": "住宿", "類別": "住宿", "預算金額(A)": 50000, "實際金額(B)": 50000, "補助款支應": 50000, "自籌款支應": 0},
+            {"項目": "中、晚餐", "類別": "餐費", "預算金額(A)": 40000, "實際金額(B)": 29200, "補助款支應": 10000, "自籌款支應": 19200},
+            {"項目": "船資", "類別": "交通", "預算金額(A)": 48000, "實際金額(B)": 40500, "補助款支應": 0, "自籌款支應": 40500},
+            {"項目": "租賃機車", "類別": "一般", "預算金額(A)": 4000, "實際金額(B)": 4000, "補助款支應": 0, "自籌款支應": 4000},
+        ]
+        blank_rows = [{"項目": "", "類別": "一般", "預算金額(A)": 0, "實際金額(B)": 0, "補助款支應": 0, "自籌款支應": 0}]
+        if "settle_version" not in st.session_state:
+            st.session_state["settle_version"] = 0
+            st.session_state["settle_df"] = pd.DataFrame(blank_rows)
+            st.session_state["settle_approved"] = 0
+
+        col_b1, col_b2, _ = st.columns([1.2, 1.2, 4])
+        with col_b1:
+            if st.button("📝 載入範例", use_container_width=True, key="settle_load_sample"):
+                st.session_state["settle_df"] = pd.DataFrame(sample_rows)
+                st.session_state["settle_approved"] = 60000
+                st.session_state["settle_version"] += 1
+                st.rerun()
+        with col_b2:
+            if st.button("🗑️ 清空重填", use_container_width=True, key="settle_clear"):
+                st.session_state["settle_df"] = pd.DataFrame(blank_rows)
+                st.session_state["settle_approved"] = 0
+                st.session_state["settle_version"] += 1
+                st.rerun()
+
+        ver = st.session_state["settle_version"]
+        approved = st.number_input("縣府（公所）核定補助金額（元）", min_value=0, step=1000,
+                                   value=int(st.session_state["settle_approved"]), key=f"settle_approved_in_{ver}")
+        st.caption("依收支清單逐項填寫：每一項的「實際金額」須等於「補助款支應」＋「自籌款支應」。"
+                   "「類別」用來套用餐費／紀念品 50%、雜支 5% 等限制。範例為虛構數字。")
+        edited = st.data_editor(
+            st.session_state["settle_df"], num_rows="dynamic", use_container_width=True, key=f"settle_editor_{ver}",
+            column_config={
+                "項目": st.column_config.TextColumn("項目", width="medium"),
+                "類別": st.column_config.SelectboxColumn("類別", options=chk.ITEM_KINDS, required=True),
+                "預算金額(A)": st.column_config.NumberColumn("預算金額(A)", min_value=0, step=100, format="%d"),
+                "實際金額(B)": st.column_config.NumberColumn("實際金額(B)", min_value=0, step=100, format="%d"),
+                "補助款支應": st.column_config.NumberColumn("補助款支應", min_value=0, step=100, format="%d"),
+                "自籌款支應": st.column_config.NumberColumn("自籌款支應", min_value=0, step=100, format="%d"),
+            },
+        )
+
+        items = [
+            {"name": r.get("項目"), "kind": r.get("類別"), "budget": r.get("預算金額(A)"),
+             "actual": r.get("實際金額(B)"), "subsidy": r.get("補助款支應"), "self_fund": r.get("自籌款支應")}
+            for r in edited.to_dict("records")
+        ]
+        findings = chk.check_settlement(approved, items)
+
+        tot_a = float(pd.to_numeric(edited["預算金額(A)"], errors="coerce").fillna(0).sum())
+        tot_b = float(pd.to_numeric(edited["實際金額(B)"], errors="coerce").fillna(0).sum())
+        tot_s = float(pd.to_numeric(edited["補助款支應"], errors="coerce").fillna(0).sum())
+        tot_f = float(pd.to_numeric(edited["自籌款支應"], errors="coerce").fillna(0).sum())
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("預算合計 (A)", f"{tot_a:,.0f}")
+        m2.metric("實際合計 (B)", f"{tot_b:,.0f}")
+        m3.metric("補助款合計", f"{tot_s:,.0f}", f"{tot_s / tot_b:.1%}" if tot_b else None, delta_color="off")
+        m4.metric("自籌款合計", f"{tot_f:,.0f}", f"{tot_f / tot_b:.1%}" if tot_b else None, delta_color="off")
+
+        n_err = sum(1 for f in findings if f.level == chk.ERROR)
+        n_warn = sum(1 for f in findings if f.level == chk.WARN)
+        if n_err:
+            st.error(f"❌ 發現 {n_err} 項不符規定，請修正後再送大隊初審。")
+        elif n_warn:
+            st.warning(f"⚠️ 金額規定都符合，另有 {n_warn} 項提醒請對照附件。")
+        else:
+            st.success("✅ 金額檢核全部通過。")
+        for f in findings:
+            line = f"**{f.title}**" + (f"：{f.detail}" if f.detail else "")
+            if f.level == chk.ERROR:
+                st.error(line, icon="❌")
+            elif f.level == chk.WARN:
+                st.warning(line, icon="⚠️")
+            else:
+                st.success(line, icon="✅")
+        st.caption("檢核結果僅供填報前自我提醒，最終以縣府核定函及大隊、會計室審查意見為準。")
+
+    else:
+        st.markdown("**先勾選這個案件的情況**（會決定哪些附件需要檢查）：")
+        selected_conds = [
+            code for code, label in chk.DOC_CONDITIONS.items()
+            if st.checkbox(label, key=f"settle_cond_{code}")
+        ]
+        todo = chk.applicable_documents(selected_conds)
+        st.markdown("---")
+        st.markdown("**逐項勾選已完成的項目：**")
+        checked = set()
+        last_group = None
+        todo_set = set(todo)
+        for i, (group, text, _cond) in enumerate(chk.DOC_CHECKLIST):
+            if (group, text) not in todo_set:
+                continue
+            if group != last_group:
+                st.markdown(f"##### {group}")
+                last_group = group
+            if st.checkbox(text, key=f"settle_doc_{i}"):
+                checked.add(text)
+        missing, total = chk.check_documents(checked, selected_conds)
+        st.markdown("---")
+        st.progress((total - len(missing)) / total if total else 0.0,
+                    text=f"已完成 {total - len(missing)} / {total} 項")
+        if missing:
+            st.warning(f"⚠️ 還有 {len(missing)} 項未完成：")
+            for g, t in missing:
+                st.markdown(f"- 【{g}】{t}")
+        else:
+            st.success("✅ 全部項目都已完成，可以送大隊初審。")
+
+
 def render_subsidy_business_tab():
     """💰 補捐助業務頁面（主網站與補捐助專區共用）"""
     st.markdown("### 【💰 補捐助業務】")
@@ -1216,7 +1359,7 @@ def render_subsidy_business_tab():
     def _go_to_tab(tab_label):
         st.session_state["top_main_nav"] = tab_label
 
-    col_go0, col_go1, col_go2 = st.columns(3)
+    col_go0, col_go1, col_go2, col_go3 = st.columns(4)
     with col_go0:
         st.button("🧭 申請與核銷流程", on_click=_go_to_tab, args=("🧭 申請與核銷流程",),
                   use_container_width=True, key="go_process_page")
@@ -1226,6 +1369,9 @@ def render_subsidy_business_tab():
     with col_go2:
         st.button("⚠️ 錯誤樣態歷史案例", on_click=_go_to_tab, args=("⚠️ 錯誤樣態案例",),
                   use_container_width=True, key="go_cases_page")
+    with col_go3:
+        st.button("✅ 核銷自我檢核", on_click=_go_to_tab, args=("✅ 核銷自我檢核",),
+                  use_container_width=True, key="go_settle_page")
 
     tasks_cat = db.get_tasks_by_filter(category="補捐助業務")
     st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
@@ -1242,7 +1388,7 @@ def render_subsidy_business_tab():
 
 
 SUBSIDY_VIEW_URL = "https://civilianforcedashboard.streamlit.app/?view=subsidy"
-SUBSIDY_VIEW_TABS = ["💰 補捐助業務", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例"]
+SUBSIDY_VIEW_TABS = ["💰 補捐助業務", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✅ 核銷自我檢核"]
 
 
 def render_subsidy_view():
@@ -1255,7 +1401,7 @@ def render_subsidy_view():
     st.markdown("""
     <div class="main-header">
         <h1>💰 臺東縣消防局民力運用及訓練科 — 補捐助案件專區</h1>
-        <p>義消申請補縣府及各鄉鎮公所補捐助案件 | 業務 SOP • 申請案件注意要點 • 錯誤樣態歷史案例</p>
+        <p>義消申請補縣府及各鄉鎮公所補捐助案件 | 業務 SOP • 申請案件注意要點 • 錯誤樣態歷史案例 • 核銷自我檢核</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1270,6 +1416,8 @@ def render_subsidy_view():
         render_application_notes_page()
     elif selected == "⚠️ 錯誤樣態案例":
         render_error_cases_page()
+    elif selected == "✅ 核銷自我檢核":
+        render_settlement_check_page()
     else:
         render_subsidy_business_tab()
 
@@ -1563,6 +1711,7 @@ tab_names = [
     "🧭 申請與核銷流程",
     "📌 申請注意要點",
     "⚠️ 錯誤樣態案例",
+    "✅ 核銷自我檢核",
     "🎯 訓練業務",
     "🌟 其他推動業務",
     "💬 我有話要說"
@@ -1697,6 +1846,11 @@ elif selected_tab == "📌 申請注意要點":
 # === 4-2. 錯誤樣態案例 Tab ===
 elif selected_tab == "⚠️ 錯誤樣態案例":
     render_error_cases_page()
+
+
+# === 4-3. 核銷自我檢核 Tab ===
+elif selected_tab == "✅ 核銷自我檢核":
+    render_settlement_check_page()
 
 
 # === 5. 訓練業務 Tab ===
