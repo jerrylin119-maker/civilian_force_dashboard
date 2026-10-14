@@ -9,10 +9,11 @@ import re
 from datetime import datetime, timedelta, timezone
 import importlib
 import database as db
+import subsidy_content as sc
 
 # Streamlit Cloud 重新部署後只會重跑 app.py，已經載入記憶體的 database 模組可能還是舊版
 # （缺少新函式，會造成 AttributeError）。偵測到缺函式時強制重新載入，不必手動 Reboot app。
-if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get_subsidy_banner", "steps_from_editor_records")):
+if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get_subsidy_banner", "steps_from_editor_records", "ensure_content_packs")):
     db = importlib.reload(db)
 
 # 頁面配置
@@ -379,6 +380,7 @@ st.markdown("""
     }
     .step-active { background: #2563eb; color: white; border-color: #1d4ed8; }
     .step-pending { background: #f8fafc; color: #64748b; }
+    .step-plain { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
     .step-done { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
 
     /* 連結藥丸標籤 */
@@ -471,6 +473,7 @@ if "compliance_data_checked" not in st.session_state:
     st.session_state["compliance_data_checked"] = True
     try:
         db.ensure_compliance_data_initialized()
+        db.ensure_content_packs()
     except Exception:
         import traceback
         traceback.print_exc()
@@ -856,7 +859,7 @@ def render_application_notes_page():
     </div>
     """, unsafe_allow_html=True)
 
-    type_icons = {"活動費": "🎪", "設備費": "🛠️"}
+    type_icons = {"活動費": "🎪", "設備費": "🛠️", "共通": "📋", "核銷": "🧾"}
     counts = {t: sum(1 for n in all_notes if n["app_type"] == t) for t in db.APPLICATION_NOTE_TYPES}
     selected_type = st.radio(
         "申請類型",
@@ -1050,6 +1053,80 @@ def render_error_cases_page():
                         st.rerun()
 
 
+def _flow_markdown(lines):
+    """流程步驟清單 -> Markdown：一般項目自動編號，以「　•」開頭的當成上一項的子項目"""
+    out, n = [], 0
+    for ln in lines:
+        if ln.startswith("　•"):
+            out.append("   - " + ln.lstrip("　• ").strip())
+        else:
+            n += 1
+            out.append(f"{n}. {ln}")
+    return "\n".join(out)
+
+
+def render_subsidy_process_page():
+    """🧭 申請與核銷流程：分隊／大隊／科室各做什麼、數字速查、陳報單範例句、科室對照、常見問答"""
+    st.markdown("""
+    <div style="background: linear-gradient(to right, #eff6ff, #f0f9ff); border: 1px solid #bfdbfe; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.2rem;">
+        <h3 style="color:#1e3a8a; margin-top:0; margin-bottom:0.4rem;">🧭 補捐助申請與核銷流程</h3>
+        <p style="color:#1e40af; font-size:0.95rem; margin-bottom:0;">
+            議員及代表建議補助款的申請、核銷作業，依「補助經費來源」選擇你的案件類型，就能看到分隊、大隊、承辦業務科室各自要做的事，以及發文單位與憑證去向。
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_l1, col_l2 = st.columns(2)
+    with col_l1:
+        st.link_button("📲 申請單位：登錄案件基本資訊（QR Code）", sc.ONLINE_REGISTER_URL, use_container_width=True)
+    with col_l2:
+        st.link_button("📊 本局同仁：後台追蹤審核與撥款進度", sc.ONLINE_TRACK_URL, use_container_width=True)
+    st.caption("陳報案件時須先完成線上登錄；同一案件有不同經費來源（縣府、公所…）時，要依來源分別登錄、分案填寫。"
+               "未完成登錄的案件，大隊初審會直接退件，業務科室也會暫緩發文。")
+
+    stage = st.radio(
+        "流程階段", ["申請", "核銷"], horizontal=True, key="flow_stage", label_visibility="collapsed",
+        format_func=lambda x: {"申請": "📝 申請階段", "核銷": "🧾 核銷階段"}[x],
+    )
+    combo = st.selectbox("這個案件的補助經費來源", sc.COMBOS, key="flow_combo")
+    flow = sc.FLOW[stage][combo]
+    st.info(f"📮 **發文單位**：{flow['發文']}")
+
+    col_r1, col_r2, col_r3 = st.columns(3)
+    for col, (label, key) in zip((col_r1, col_r2, col_r3),
+                                 (("🧑‍🚒 分隊", "分隊"), ("🏢 大隊", "大隊"), ("🏛️ 局本部／承辦業務科室", "科室"))):
+        with col:
+            with st.container(border=True):
+                st.markdown(f"**{label}**")
+                st.markdown(_flow_markdown(flow[key]))
+
+    st.markdown("---")
+    st.markdown("#### 🔢 數字速查")
+    for row_start in range(0, len(sc.QUICK_NUMBERS), 4):
+        cols = st.columns(4)
+        for col, (num, desc) in zip(cols, sc.QUICK_NUMBERS[row_start:row_start + 4]):
+            with col:
+                with st.container(border=True):
+                    st.markdown(f"<div style='font-size:1.6rem;font-weight:800;color:#1d4ed8;'>{html.escape(num)}</div>"
+                                f"<div style='font-size:0.85rem;color:#475569;'>{html.escape(desc)}</div>", unsafe_allow_html=True)
+
+    st.markdown("#### 📝 陳報單範例句（點右上角圖示可複製，ＯＯＯ換成實際內容）")
+    for label, text in sc.SAMPLE_SENTENCES.items():
+        st.caption(label)
+        try:
+            st.code(text, language=None, wrap_lines=True)
+        except TypeError:  # 舊版 Streamlit 沒有 wrap_lines 參數
+            st.code(text, language=None)
+
+    st.markdown("#### 🏢 業務科室承辦案件類別")
+    st.dataframe(pd.DataFrame(sc.OFFICE_TABLE, columns=["科室名稱", "承辦案件類別"]), hide_index=True, use_container_width=True)
+
+    st.markdown("#### ❓ 常見問答")
+    for q, a in sc.FAQ:
+        with st.expander(q):
+            st.markdown(a)
+
+
 def _banner_inline_markup(text):
     """提示文字：先跳脫 HTML（避免亂碼或惡意標籤），再把 **粗體**、==紅色粗體== 標記轉成樣式，換行轉成 <br>"""
     safe = html.escape(text or "")
@@ -1061,7 +1138,7 @@ def _banner_inline_markup(text):
 def render_subsidy_banner():
     """補捐助業務頁面最上方的流程說明區塊（標題、流程步驟、提示文字，承辦人可在網頁上修改）"""
     banner = db.get_subsidy_banner()
-    status_class = {"已完成": "step-done", "進行中": "step-active", "未開始": "step-pending"}
+    status_class = {"一般": "step-plain", "已完成": "step-done", "進行中": "step-active", "未開始": "step-pending"}
 
     steps_html = ""
     if banner["steps"]:
@@ -1139,9 +1216,12 @@ def render_subsidy_business_tab():
     def _go_to_tab(tab_label):
         st.session_state["top_main_nav"] = tab_label
 
-    col_go1, col_go2 = st.columns(2)
+    col_go0, col_go1, col_go2 = st.columns(3)
+    with col_go0:
+        st.button("🧭 申請與核銷流程", on_click=_go_to_tab, args=("🧭 申請與核銷流程",),
+                  use_container_width=True, key="go_process_page")
     with col_go1:
-        st.button("📌 申請案件注意要點（活動費／設備費）", on_click=_go_to_tab, args=("📌 申請注意要點",),
+        st.button("📌 申請案件注意要點", on_click=_go_to_tab, args=("📌 申請注意要點",),
                   use_container_width=True, key="go_notes_page")
     with col_go2:
         st.button("⚠️ 錯誤樣態歷史案例", on_click=_go_to_tab, args=("⚠️ 錯誤樣態案例",),
@@ -1162,7 +1242,7 @@ def render_subsidy_business_tab():
 
 
 SUBSIDY_VIEW_URL = "https://civilianforcedashboard.streamlit.app/?view=subsidy"
-SUBSIDY_VIEW_TABS = ["💰 補捐助業務", "📌 申請注意要點", "⚠️ 錯誤樣態案例"]
+SUBSIDY_VIEW_TABS = ["💰 補捐助業務", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例"]
 
 
 def render_subsidy_view():
@@ -1184,7 +1264,9 @@ def render_subsidy_view():
     selected = st.radio("專區導覽", SUBSIDY_VIEW_TABS, horizontal=True,
                         label_visibility="collapsed", key="top_main_nav")
 
-    if selected == "📌 申請注意要點":
+    if selected == "🧭 申請與核銷流程":
+        render_subsidy_process_page()
+    elif selected == "📌 申請注意要點":
         render_application_notes_page()
     elif selected == "⚠️ 錯誤樣態案例":
         render_error_cases_page()
@@ -1478,6 +1560,7 @@ tab_names = [
     "🚒 義消業務",
     "🎁 義消福利",
     "💰 補捐助業務",
+    "🧭 申請與核銷流程",
     "📌 申請注意要點",
     "⚠️ 錯誤樣態案例",
     "🎯 訓練業務",
@@ -1600,6 +1683,11 @@ elif selected_tab == "🎁 義消福利":
 # === 4. 補捐助業務 Tab ===
 elif selected_tab == "💰 補捐助業務":
     render_subsidy_business_tab()
+
+# === 4-0. 申請與核銷流程 Tab ===
+elif selected_tab == "🧭 申請與核銷流程":
+    render_subsidy_process_page()
+
 
 # === 4-1. 申請注意要點 Tab ===
 elif selected_tab == "📌 申請注意要點":

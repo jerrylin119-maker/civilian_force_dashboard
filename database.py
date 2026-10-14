@@ -10,6 +10,7 @@ database.py - 臺東縣消防局民力運用及訓練科 業務知識動態看�
 
 import sqlite3
 import json
+import subsidy_content as _sc
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 import os
@@ -26,27 +27,32 @@ FEEDBACK_CATEGORIES = ["義消業務", "義消福利", "補捐助案件", "訓�
 FEEDBACK_STATUSES = ["待處理", "處理中", "已回覆", "列入參考"]
 
 # 補捐助「申請案件注意要點」「錯誤樣態歷史案例」兩個功能頁面使用
-APPLICATION_NOTE_TYPES = ["活動費", "設備費"]
+APPLICATION_NOTE_TYPES = ["活動費", "設備費", "共通", "核銷"]
 APPLICATION_NOTE_TYPE_TITLES = {
     "活動費": "活動類計畫與經費編列原則",
     "設備費": "設備類購置與財產登記標準",
+    "共通": "申請案件共通規定（陳報單、建議表、線上登錄）",
+    "核銷": "核銷作業與憑證規定",
 }
 ERROR_CASE_TYPES = ["活動費", "設備費", "共通／其他"]
 
 # 注意要點初始內容（承辦人提供的範例）。僅在資料表完全沒有資料、且雲端備份也沒有這張表時才會寫入一次。
 # 補捐助業務頁面最上方的「申請流程說明區塊」預設內容（承辦人在網頁上改過之後就改用資料庫裡的版本）。
 # 提示文字標記：**文字** = 粗體、==文字== = 紅色粗體
-SUBSIDY_STEP_STATUSES = ["已完成", "進行中", "未開始"]
+SUBSIDY_STEP_STATUSES = ["一般", "已完成", "進行中", "未開始"]
 SUBSIDY_BANNER_DEFAULT = {
     "title": "義消申請補縣府及各鄉鎮公所補捐助案件管理專區",
     "steps": [
-        {"name": "申請表單與系統登錄", "status": "已完成"},
-        {"name": "資格初審與單據查核", "status": "已完成"},
-        {"name": "依計畫執行採購/活動", "status": "進行中"},
-        {"name": "黏存單據送科核銷", "status": "未開始"},
-        {"name": "結案撥款", "status": "未開始"},
+        {"name": "分隊擬計畫、陳報單，報送大隊", "status": "一般"},
+        {"name": "大隊初審並完成線上 QR Code 登錄", "status": "一般"},
+        {"name": "業務科室層轉會辦，發文申請補助", "status": "一般"},
+        {"name": "縣府／公所核定，辦理活動或採購", "status": "一般"},
+        {"name": "分隊製作核銷文件，大隊初審", "status": "一般"},
+        {"name": "科室發文請款，結案撥款", "status": "一般"},
     ],
-    "hint": ("📌 **申請範例更新提示**：補捐助申請範例將隨時間動態更新，"
+    "hint": ("📌 **線上列管**：陳報案件時請先登錄案件基本資訊（連結在「申請與核銷流程」頁面），"
+             "==未完成登錄的案件，大隊初審將直接退件==。\n"
+             "📌 **申請範例更新提示**：補捐助申請範例將隨時間動態更新，"
              "==更新部分會以顏色做清楚區別==，請各分隊務必至系統下載最新版本填報。"),
 }
 
@@ -1066,6 +1072,13 @@ def search_tasks_for_jump(query_str):
     conn.close()
     return [dict(row) for row in rows]
 
+def _export_applied_packs():
+    conn = get_db_connection()
+    packs = _get_applied_packs(conn.cursor())
+    conn.close()
+    return packs
+
+
 def _export_subsidy_banner():
     """匯出自訂過的流程說明區塊；沒自訂過回傳 None（還原時就是回到預設）"""
     b = get_subsidy_banner()
@@ -1090,6 +1103,7 @@ def get_full_system_data():
         "application_notes": notes_df.to_dict(orient="records"),
         "error_cases": cases_df.to_dict(orient="records"),
         "subsidy_banner": _export_subsidy_banner(),
+        "content_packs_applied": _export_applied_packs(),
         "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "organization": "臺東縣消防局民力運用及訓練科"
     }
@@ -1304,6 +1318,8 @@ def import_full_system_from_json(json_obj):
     )
     if "subsidy_banner" in json_obj:
         _restore_subsidy_banner(cursor, json_obj.get("subsidy_banner"))
+    if isinstance(json_obj.get("content_packs_applied"), list):
+        _set_applied_packs(cursor, json_obj["content_packs_applied"])
     if isinstance(notes_backup, list) or isinstance(cases_backup, list):
         cursor.execute("INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('compliance_data_ready', 'true')")
 
@@ -1648,6 +1664,70 @@ def _restore_subsidy_banner(cursor, banner):
         )
 
 
+def _get_applied_packs(cursor):
+    row = cursor.execute("SELECT value FROM SystemMeta WHERE key = 'content_packs_applied'").fetchone()
+    return [x for x in (row[0].split(",") if row and row[0] else []) if x]
+
+
+def _set_applied_packs(cursor, packs):
+    cursor.execute(
+        "INSERT OR REPLACE INTO SystemMeta (key, value) VALUES ('content_packs_applied', ?)",
+        (",".join(sorted(set(packs))),),
+    )
+
+
+def ensure_content_packs():
+    """把內建內容包（申請注意要點、常見退件樣態）匯入資料庫，每個資料庫只匯入一次。
+
+    - 同類型、同標題已存在的項目不會重複匯入；匯入後就是一般資料，承辦人可自行修改或刪除（刪掉不會再回來）。
+    - 必須等「備份還原／範例初始化」完成（compliance_data_ready）才會匯入，避免蓋住雲端備份裡的真實資料。
+    - 已匯入的內容包代號會寫進雲端備份，伺服器重啟還原後不會再重複匯入。
+    """
+    if not is_compliance_data_ready():
+        return False
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    applied = _get_applied_packs(cursor)
+    if _sc.PACK_ID in applied:
+        conn.close()
+        return False
+
+    existing_notes = {(r[0], r[1]) for r in cursor.execute("SELECT app_type, title FROM ApplicationNotes")}
+    next_sort = {
+        t: m for t, m in cursor.execute("SELECT app_type, COALESCE(MAX(sort_order), 0) FROM ApplicationNotes GROUP BY app_type")
+    }
+    for n in _sc.NOTES:
+        if (n["app_type"], n["title"]) in existing_notes:
+            continue
+        next_sort[n["app_type"]] = next_sort.get(n["app_type"], 0) + 1
+        cursor.execute(
+            """
+            INSERT INTO ApplicationNotes (app_type, title, content, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (n["app_type"], n["title"], n["content"], next_sort[n["app_type"]], _sc.PACK_DATE, _sc.PACK_DATE),
+        )
+
+    existing_cases = {r[0] for r in cursor.execute("SELECT title FROM ErrorCases")}
+    for c in _sc.CASES:
+        if c["title"] in existing_cases:
+            continue
+        cursor.execute(
+            """
+            INSERT INTO ErrorCases (app_type, title, case_year, description, consequence, correction, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (c["app_type"], c["title"], c.get("case_year", ""), c["description"], c["consequence"],
+             c["correction"], _sc.PACK_DATE, _sc.PACK_DATE),
+        )
+
+    _set_applied_packs(cursor, applied + [_sc.PACK_ID])
+    conn.commit()
+    conn.close()
+    return True
+
+
 def is_compliance_data_ready():
     """兩個新頁面的資料是否已經完成初始化（還原備份或寫入範例）。沒完成通常代表雲端備份暫時讀不到。"""
     init_db()
@@ -1726,6 +1806,8 @@ def ensure_compliance_data_initialized():
 
         backup_notes = backup_obj.get("application_notes")
         backup_cases = backup_obj.get("error_cases")
+        if isinstance(backup_obj.get("content_packs_applied"), list):
+            _set_applied_packs(cursor, _get_applied_packs(cursor) + backup_obj["content_packs_applied"])
 
         if notes_n == 0:
             if isinstance(backup_notes, list):
