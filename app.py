@@ -1349,6 +1349,181 @@ def render_settlement_check_page():
             st.success("✅ 全部項目都已完成，可以送大隊初審。")
 
 
+def render_plan_generator_page():
+    """✏️ 計畫書產生器：選計畫類型、填必要資料，產出計畫書（Word）與概算表（Excel）草稿。
+
+    先套用申請階段的規則檢查。輸入只留在目前瀏覽器分頁的記憶體中，不寫入資料庫、不上傳。
+    """
+    import plan_generator as pg
+    from datetime import date, timedelta
+
+    st.markdown("""
+    <div style="background: linear-gradient(to right, #eff6ff, #eef2ff); border: 1px solid #bfdbfe; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.2rem;">
+        <h3 style="color:#1e3a8a; margin-top:0; margin-bottom:0.4rem;">✏️ 計畫書與概算表產生器（草稿）</h3>
+        <p style="color:#1e40af; font-size:0.95rem; margin-bottom:0.4rem;">
+            選擇計畫類型、填入必要資料，系統用固定範本產出<strong>計畫書（Word）</strong>與<strong>經費概算表（Excel）</strong>草稿，
+            並在產出前先檢查自籌款、餐費比例、用字、備註欄等規定。
+        </p>
+        <span style="font-size:0.85rem; color:#1e3a8a; background:#dbeafe; border:1px solid #93c5fd; border-radius:9999px; padding:2px 12px;">
+            🔒 輸入的資料只在這個網頁暫時計算，不會儲存或上傳｜草稿仍須由承辦人確認後再送審
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    type_keys = list(pg.PLAN_TYPES.keys())
+    plan_type = st.selectbox("計畫類型", type_keys, format_func=lambda k: pg.PLAN_TYPES[k]["label"], key="plan_type_sel")
+    st.caption(pg.PLAN_TYPES[plan_type]["desc"] + "　（其他計畫類型陸續新增中）")
+
+    course_blank = [{"時間": "", "課程內容": "", "教官／講師": ""}]
+    course_starter = [
+        {"時間": "08:10－09:00", "課程內容": "學員簽到", "教官／講師": ""},
+        {"時間": "09:10－10:00", "課程內容": "", "教官／講師": ""},
+        {"時間": "10:10－11:00", "課程內容": "", "教官／講師": ""},
+        {"時間": "12:00－13:30", "課程內容": "午餐及休息", "教官／講師": ""},
+    ]
+    item_blank = [{"項目": "", "類別": "一般", "數量": 0, "單位": "", "單價": 0, "用途說明": "", "補助款支應": 0}]
+    item_sample = [
+        {"項目": "便當", "類別": "餐費", "數量": 60, "單位": "份", "單價": 100, "用途說明": "供訓練人員中餐及晚餐", "補助款支應": 6000},
+        {"項目": "棚架", "類別": "一般", "數量": 2, "單位": "式", "單價": 3500, "用途說明": "供訓練人員休息使用", "補助款支應": 7000},
+        {"項目": "礦泉水", "類別": "一般", "數量": 10, "單位": "箱", "單價": 150, "用途說明": "供訓練人員飲用", "補助款支應": 1500},
+        {"項目": "救助吊帶", "類別": "一般", "數量": 5, "單位": "條", "單價": 2200, "用途說明": "供繩索救援確保訓練人員安全", "補助款支應": 5500},
+    ]
+    if "plan_ver" not in st.session_state:
+        st.session_state["plan_ver"] = 0
+        st.session_state["plan_items"] = pd.DataFrame(item_blank)
+        st.session_state["plan_courses"] = pd.DataFrame(course_starter)
+        st.session_state["plan_subsidy"] = 0
+
+    c1, c2, _ = st.columns([1.3, 1.3, 4])
+    with c1:
+        if st.button("📝 載入範例", use_container_width=True, key="plan_load_sample"):
+            st.session_state["plan_items"] = pd.DataFrame(item_sample)
+            st.session_state["plan_subsidy"] = 20000
+            st.session_state["plan_ver"] += 1
+            st.rerun()
+    with c2:
+        if st.button("🗑️ 清空重填", use_container_width=True, key="plan_clear"):
+            st.session_state["plan_items"] = pd.DataFrame(item_blank)
+            st.session_state["plan_courses"] = pd.DataFrame(course_starter)
+            st.session_state["plan_subsidy"] = 0
+            st.session_state["plan_ver"] += 1
+            st.rerun()
+    ver = st.session_state["plan_ver"]
+
+    st.markdown("#### ① 基本資料")
+    a1, a2, a3 = st.columns([2, 2, 1])
+    unit = a1.text_input("申請單位 *", placeholder="例：達仁義消分隊", key=f"plan_unit_{ver}")
+    name = a2.text_input("活動名稱 *", placeholder="例：繩索救助訓練（不必寫年度與「計畫」）", key=f"plan_name_{ver}")
+    year = a3.number_input("年度（民國）", min_value=100, max_value=200, value=pg.roc_year(), key=f"plan_year_{ver}")
+    b1, b2, b3 = st.columns([1.3, 1.3, 2.4])
+    d_start = b1.date_input("開始日期 *", value=date.today() + timedelta(days=45), key=f"plan_start_{ver}")
+    d_end = b2.date_input("結束日期 *", value=date.today() + timedelta(days=45), key=f"plan_end_{ver}")
+    place = b3.text_input("地點 *", placeholder="例：達仁分隊訓練廣場", key=f"plan_place_{ver}")
+    d1, d2 = st.columns([3, 1])
+    audience = d1.text_input("參訓對象 *", placeholder="例：本大隊所屬達仁義消人員（含教官團）", key=f"plan_aud_{ver}")
+    headcount = d2.number_input("參訓人數", min_value=0, value=30, step=1, key=f"plan_hc_{ver}")
+    e1, e2 = st.columns(2)
+    co_org = e1.text_input("協辦單位（選填）", placeholder="例：大武大隊達仁分隊", key=f"plan_co_{ver}")
+    councilors = e2.text_input("建議補助議員（選填，空白會填「ＯＯ議員」）", placeholder="例：王議員、李議員（不必加「議員」二字也可）", key=f"plan_cl_{ver}")
+    instructors = st.text_input("訓練師資（選填）", placeholder="例：由本分隊具備陸域救助訓練教官或助教資格之人員組成", key=f"plan_ins_{ver}")
+    supervisor = st.text_input("督導考核（選填）", value="本大隊大隊長、副大隊長隨時督導考核", key=f"plan_sup_{ver}")
+
+    st.markdown("#### ② 課程表")
+    st.caption("辦理訓練、研習活動，計畫書內須列出課程表。可新增或刪除列。")
+    courses_df = st.data_editor(st.session_state["plan_courses"], num_rows="dynamic", use_container_width=True,
+                                key=f"plan_course_editor_{ver}")
+
+    st.markdown("#### ③ 經費概算")
+    subsidy = st.number_input("議員建議補助款（元）", min_value=0, step=1000, value=int(st.session_state["plan_subsidy"]),
+                              key=f"plan_sub_{ver}")
+    st.caption("每個品項填數量、單價與「用途說明」；「補助款支應」是這個品項由補助款支付的金額，其餘自動算成自籌款。"
+               "概算表備註（用途＋經費來源）由系統自動產生。各項補助款支應加總要等於補助金額。")
+    items_df = st.data_editor(
+        st.session_state["plan_items"], num_rows="dynamic", use_container_width=True, key=f"plan_item_editor_{ver}",
+        column_config={
+            "類別": st.column_config.SelectboxColumn("類別", options=pg.ITEM_KINDS, required=True),
+            "數量": st.column_config.NumberColumn("數量", min_value=0, step=1, format="%d"),
+            "單價": st.column_config.NumberColumn("單價", min_value=0, step=10, format="%d"),
+            "補助款支應": st.column_config.NumberColumn("補助款支應", min_value=0, step=100, format="%d"),
+        },
+    )
+
+    with st.expander("進階：自訂緣由、目的、訓練方式、規定事項，與參訓名冊（都可留空，系統會用範本）"):
+        bg = st.text_area("緣由（留空則自動產生）", key=f"plan_bg_{ver}", height=90)
+        pu = st.text_area("目的（留空則自動產生）", key=f"plan_pu_{ver}", height=90)
+        me = st.text_area("訓練方式（留空則使用範本）", key=f"plan_me_{ver}", height=90)
+        ru = st.text_area("規定事項（每行一項，留空則使用範本）", key=f"plan_ru_{ver}", height=110)
+        st.caption("參訓名冊（選填；輸入後才會產出附件三。名冊含個資，僅在本頁暫時使用）")
+        roster_df = st.data_editor(pd.DataFrame([{"單位": "", "職稱": "", "姓名": ""}]), num_rows="dynamic",
+                                   use_container_width=True, key=f"plan_roster_{ver}")
+
+    def _rows(df, mapping):
+        out = []
+        for r in df.to_dict("records"):
+            out.append({k: r.get(v) for k, v in mapping.items()})
+        return out
+
+    items = pg.normalize_items(
+        _rows(items_df, {"name": "項目", "kind": "類別", "qty": "數量", "unit": "單位", "price": "單價",
+                        "use": "用途說明", "subsidy": "補助款支應"}),
+        pg.PLAN_TYPES[plan_type]["source_label"])
+    courses = _rows(courses_df, {"time": "時間", "content": "課程內容", "teacher": "教官／講師"})
+    roster = _rows(roster_df, {"unit": "單位", "title": "職稱", "name": "姓名"})
+    ctx = pg.PlanContext(
+        plan_type=plan_type, unit=unit, year=int(year), name=name, start=d_start, end=d_end, place=place,
+        audience=audience, headcount=int(headcount), method=me, instructors=instructors, co_organizer=co_org,
+        supervisor=supervisor, councilors=councilors, subsidy=float(subsidy), items=items, courses=courses,
+        roster=roster, background=bg, purpose=pu, rules=ru)
+
+    st.markdown("---")
+    st.markdown("#### ④ 規定檢查與草稿")
+    if items:
+        m1, m2, m3 = st.columns(3)
+        m1.metric("總經費", f"{ctx.total:,.0f}")
+        m2.metric("補助款", f"{ctx.subsidy:,.0f}", f"{ctx.subsidy / ctx.total:.1%}" if ctx.total else None, delta_color="off")
+        m3.metric("自籌款", f"{ctx.self_fund:,.0f}", f"{ctx.self_fund / ctx.total:.1%}" if ctx.total else None, delta_color="off")
+
+    findings = pg.check_plan(ctx)
+    n_err = sum(1 for f in findings if f.level == pg.ERROR)
+    n_warn = sum(1 for f in findings if f.level == pg.WARN)
+    if n_err:
+        st.error(f"❌ 有 {n_err} 項不符規定，建議修正後再送審（仍可先下載草稿修改）。")
+    elif n_warn:
+        st.warning(f"⚠️ 規定檢查通過，另有 {n_warn} 項提醒。")
+    else:
+        st.success("✅ 規定檢查全部通過。")
+    for f in findings:
+        line = f"**{f.title}**" + (f"：{f.detail}" if f.detail else "")
+        if f.level == pg.ERROR:
+            st.error(line, icon="❌")
+        elif f.level == pg.WARN:
+            st.warning(line, icon="⚠️")
+        else:
+            st.success(line, icon="✅")
+
+    ready = bool(unit.strip() and name.strip() and items)
+    if not ready:
+        st.info("請先填入申請單位、活動名稱與至少一個概算項目，才能產出草稿。")
+        return
+    st.markdown("##### 草稿預覽")
+    with st.expander("展開計畫書預覽", expanded=True):
+        st.markdown(pg.markdown_preview(ctx))
+        st.markdown(f"**{pg.budget_title(ctx)}**")
+        st.dataframe(pd.DataFrame([{"項次": n + 1, "項目": i["name"], "數量": i["qty"], "單位": i["unit"], "單價": i["price"],
+                                    "合計": i["total"], "備註": i["remark"]} for n, i in enumerate(items)]),
+                     use_container_width=True, hide_index=True)
+        st.caption(pg.budget_note(ctx))
+    base = f"{ctx.year}年{ctx.unit.strip()}{ctx.name.strip()}"
+    d1_, d2_ = st.columns(2)
+    d1_.download_button("📄 下載計畫書（Word）", data=pg.build_docx(ctx), file_name=f"{base}計畫書草稿.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True, type="primary")
+    d2_.download_button("📊 下載概算表（Excel）", data=pg.build_xlsx(ctx), file_name=f"{base}概算表草稿.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True)
+    st.caption("草稿依固定範本產生，送審前請承辦人逐項確認內容、數字與核章；檢查結果僅供提醒，最終以縣府及局內審查為準。")
+
+
 def render_subsidy_business_tab():
     """💰 補捐助業務頁面（主網站與補捐助專區共用）"""
     st.markdown("### 【💰 補捐助業務】")
@@ -1359,7 +1534,7 @@ def render_subsidy_business_tab():
     def _go_to_tab(tab_label):
         st.session_state["top_main_nav"] = tab_label
 
-    col_go0, col_go1, col_go2, col_go3 = st.columns(4)
+    col_go0, col_go1, col_go2, col_go3, col_go4 = st.columns(5)
     with col_go0:
         st.button("🧭 申請與核銷流程", on_click=_go_to_tab, args=("🧭 申請與核銷流程",),
                   use_container_width=True, key="go_process_page")
@@ -1372,6 +1547,9 @@ def render_subsidy_business_tab():
     with col_go3:
         st.button("✅ 核銷自我檢核", on_click=_go_to_tab, args=("✅ 核銷自我檢核",),
                   use_container_width=True, key="go_settle_page")
+    with col_go4:
+        st.button("✏️ 計畫書產生器", on_click=_go_to_tab, args=("✏️ 計畫書產生器",),
+                  use_container_width=True, key="go_plan_page")
 
     tasks_cat = db.get_tasks_by_filter(category="補捐助業務")
     st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
@@ -1388,7 +1566,7 @@ def render_subsidy_business_tab():
 
 
 SUBSIDY_VIEW_URL = "https://civilianforcedashboard.streamlit.app/?view=subsidy"
-SUBSIDY_VIEW_TABS = ["💰 補捐助業務", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✅ 核銷自我檢核"]
+SUBSIDY_VIEW_TABS = ["💰 補捐助業務", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✏️ 計畫書產生器", "✅ 核銷自我檢核"]
 
 
 def render_subsidy_view():
@@ -1401,7 +1579,7 @@ def render_subsidy_view():
     st.markdown("""
     <div class="main-header">
         <h1>💰 臺東縣消防局民力運用及訓練科 — 補捐助案件專區</h1>
-        <p>義消申請補縣府及各鄉鎮公所補捐助案件 | 業務 SOP • 申請案件注意要點 • 錯誤樣態歷史案例 • 核銷自我檢核</p>
+        <p>義消申請補縣府及各鄉鎮公所補捐助案件 | 業務 SOP • 申請案件注意要點 • 錯誤樣態歷史案例 • 計畫書產生器 • 核銷自我檢核</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1416,6 +1594,8 @@ def render_subsidy_view():
         render_application_notes_page()
     elif selected == "⚠️ 錯誤樣態案例":
         render_error_cases_page()
+    elif selected == "✏️ 計畫書產生器":
+        render_plan_generator_page()
     elif selected == "✅ 核銷自我檢核":
         render_settlement_check_page()
     else:
@@ -1711,6 +1891,7 @@ tab_names = [
     "🧭 申請與核銷流程",
     "📌 申請注意要點",
     "⚠️ 錯誤樣態案例",
+    "✏️ 計畫書產生器",
     "✅ 核銷自我檢核",
     "🎯 訓練業務",
     "🌟 其他推動業務",
@@ -1846,6 +2027,11 @@ elif selected_tab == "📌 申請注意要點":
 # === 4-2. 錯誤樣態案例 Tab ===
 elif selected_tab == "⚠️ 錯誤樣態案例":
     render_error_cases_page()
+
+
+# === 4-2b. 計畫書產生器 Tab ===
+elif selected_tab == "✏️ 計畫書產生器":
+    render_plan_generator_page()
 
 
 # === 4-3. 核銷自我檢核 Tab ===
