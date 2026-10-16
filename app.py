@@ -1524,49 +1524,119 @@ def render_plan_generator_page():
     st.caption("草稿依固定範本產生，送審前請承辦人逐項確認內容、數字與核章；檢查結果僅供提醒，最終以縣府及局內審查為準。")
 
 
-def render_subsidy_business_tab():
-    """💰 補捐助業務頁面（主網站與補捐助專區共用）"""
-    st.markdown("### 【💰 補捐助業務】")
-    st.caption("👤 **科內承辦人**：廖昱翔科員、林威宇小隊長")
-    
-    render_subsidy_banner()
-
+def render_subsidy_guide():
+    """🏠 補捐助專區使用導覽：依「我現在要做什麼」帶同仁走到正確的頁面。"""
     def _go_to_tab(tab_label):
         st.session_state["top_main_nav"] = tab_label
 
-    col_go0, col_go1, col_go2, col_go3, col_go4 = st.columns(5)
-    with col_go0:
-        st.button("🧭 申請與核銷流程", on_click=_go_to_tab, args=("🧭 申請與核銷流程",),
-                  use_container_width=True, key="go_process_page")
-    with col_go1:
-        st.button("📌 申請案件注意要點", on_click=_go_to_tab, args=("📌 申請注意要點",),
-                  use_container_width=True, key="go_notes_page")
-    with col_go2:
-        st.button("⚠️ 錯誤樣態歷史案例", on_click=_go_to_tab, args=("⚠️ 錯誤樣態案例",),
-                  use_container_width=True, key="go_cases_page")
-    with col_go3:
-        st.button("✅ 核銷自我檢核", on_click=_go_to_tab, args=("✅ 核銷自我檢核",),
-                  use_container_width=True, key="go_settle_page")
-    with col_go4:
-        st.button("✏️ 計畫書產生器", on_click=_go_to_tab, args=("✏️ 計畫書產生器",),
-                  use_container_width=True, key="go_plan_page")
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); border-radius: 12px; padding: 1.4rem 1.6rem; margin-bottom: 1.2rem; color: #fff;">
+        <h2 style="margin:0 0 0.4rem 0; color:#fff; font-size:1.5rem;">👋 歡迎使用補捐助案件專區</h2>
+        <p style="margin:0; font-size:1rem; color:#dbeafe;">
+            這裡整理了義消向縣府及各鄉鎮公所申請補（捐）助、辦理核銷所需的流程、規定、案例與小工具。
+            不知道從哪裡開始？先選下面三種情況之一，照步驟走就對了。
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    tasks_cat = db.get_tasks_by_filter(category="補捐助業務")
-    st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
-    if not tasks_cat:
-        st.info("目前【補捐助業務】無符合條件的項目。")
-    else:
-        for t in tasks_cat:
-            render_task_card(t)
+    st.markdown("#### 🧭 你現在要做什麼？")
+    _GUIDE_STEP_H = 240
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        with st.container(border=True):
+            st.markdown("##### 🆕 我要申請補捐助")
+            with st.container(height=_GUIDE_STEP_H, border=False):
+              st.markdown(
+                "1. 先看**申請流程**，了解誰要做什麼、送到哪裡\n"
+                "2. 對照**申請注意要點**，確認經費比例與用字\n"
+                "3. 用**計畫書產生器**做出計畫書與概算表草稿\n"
+                "4. 完成**線上登錄**後，依流程送大隊"
+            )
+            st.button("➡️ 從申請流程開始", on_click=_go_to_tab, args=("🧭 申請與核銷流程",),
+                      use_container_width=True, key="guide_apply_flow", type="primary")
+            st.button("✏️ 直接產生計畫書", on_click=_go_to_tab, args=("✏️ 計畫書產生器",),
+                      use_container_width=True, key="guide_apply_gen")
+    with c2:
+        with st.container(border=True):
+            st.markdown("##### 🧾 我要辦理核銷")
+            with st.container(height=_GUIDE_STEP_H, border=False):
+              st.markdown(
+                "1. 先看**核銷流程**與陳報單範例句\n"
+                "2. 對照**核銷注意要點**備齊單據與附件\n"
+                "3. 用**核銷自我檢核**檢查金額與文件\n"
+                "4. 確認無誤後送大隊初審"
+            )
+            st.button("➡️ 開始核銷自我檢核", on_click=_go_to_tab, args=("✅ 核銷自我檢核",),
+                      use_container_width=True, key="guide_settle_check", type="primary")
+            st.button("📌 查核銷注意要點", on_click=_go_to_tab, args=("📌 申請注意要點",),
+                      use_container_width=True, key="guide_settle_notes")
+    with c3:
+        with st.container(border=True):
+            st.markdown("##### 🔍 避免被退件")
+            with st.container(height=_GUIDE_STEP_H, border=False):
+              st.markdown(
+                "1. 看**錯誤樣態案例**，了解常見退件原因\n"
+                "2. 對照自己的計畫書與概算表是否有同樣問題\n"
+                "3. 送件前再用**自我檢核**工具確認一次"
+            )
+            st.button("➡️ 看錯誤樣態案例", on_click=_go_to_tab, args=("⚠️ 錯誤樣態案例",),
+                      use_container_width=True, key="guide_cases", type="primary")
+            st.button("📌 看申請注意要點", on_click=_go_to_tab, args=("📌 申請注意要點",),
+                      use_container_width=True, key="guide_notes")
+
+    st.markdown("#### 🗂️ 各頁面功能一覽")
+    pages = [
+        ("🧭 申請與核銷流程", "🧭 申請與核銷流程", "完整的申請、核銷流程，分隊／大隊／科室各步驟做什麼，附陳報單範例句與常見問答。"),
+        ("📌 申請注意要點", "📌 申請注意要點", "活動費、設備費、共通與核銷的規定：用字、自籌款、餐費比例、單據與附件。"),
+        ("⚠️ 錯誤樣態案例", "⚠️ 錯誤樣態案例", "過去常見的退件與缺失，含錯誤說明、造成的問題與正確做法。"),
+        ("✏️ 計畫書產生器", "✏️ 計畫書產生器", "選計畫類型、填必要資料，產出計畫書（Word）與概算表（Excel）草稿，並先檢查規定。"),
+        ("✅ 核銷自我檢核", "✅ 核銷自我檢核", "送大隊初審前，自行檢查收支清單金額與核銷文件是否備齊。"),
+    ]
+    for label, target, desc in pages:
+        cb, cd = st.columns([1.3, 4])
+        with cb:
+            st.button(label, on_click=_go_to_tab, args=(target,), use_container_width=True, key=f"guide_pg_{target}")
+        with cd:
+            st.markdown(f"<div style='padding-top:0.35rem; color:#475569;'>{html.escape(desc)}</div>", unsafe_allow_html=True)
+
+    st.markdown("#### 🔢 先記住這幾個數字")
+    chips = "".join(
+        f'<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:0.7rem 0.9rem;">'
+        f'<div style="font-size:1.5rem; font-weight:800; color:#1d4ed8;">{html.escape(n)}</div>'
+        f'<div style="font-size:0.85rem; color:#475569;">{html.escape(d)}</div></div>'
+        for n, d in sc.QUICK_NUMBERS[:6]
+    )
+    st.markdown(f'<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:0.6rem; margin-bottom:1rem;">{chips}</div>', unsafe_allow_html=True)
+
+    with st.container(border=True):
+        st.markdown("##### ⚠️ 陳報前必做：線上登錄案件基本資訊")
+        st.markdown("申請單位（分隊／大隊）陳報案件時須先完成線上登錄，**未完成登錄的案件，大隊初審會直接退件**，業務科室也會暫緩發文。")
+        st.link_button("📝 前往線上登錄", sc.ONLINE_REGISTER_URL)
+
+    st.caption("👤 **科內承辦人**：廖昱翔科員、林威宇小隊長　｜　輸入計畫書產生器、核銷自我檢核的資料只在網頁暫時計算，不會儲存或上傳。")
+
+
+def render_subsidy_business_tab():
+    """💰 補捐助業務頁面（主網站與補捐助專區共用）：使用導覽＋流程總覽。"""
+    render_subsidy_guide()
+
+    st.markdown("---")
+    st.markdown("#### 📣 流程總覽與最新提醒")
+    render_subsidy_banner()
 
     if st.session_state.get("is_admin"):
         st.markdown("---")
-        st.caption("📎 **補捐助專區獨立網址**（只顯示本頁、申請注意要點、錯誤樣態案例，可直接轉給只需查看補捐助的同仁；僅承辦人維護模式看得到這段說明）：")
-        st.code(SUBSIDY_VIEW_URL, language=None)
+        with st.expander("🛠️ 承辦人維護：列管業務卡片與專區網址", expanded=False):
+            tasks_cat = db.get_tasks_by_filter(category="補捐助業務")
+            st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
+            for t in tasks_cat:
+                render_task_card(t)
+            st.caption("📎 **補捐助專區獨立網址**（只顯示導覽、流程、注意要點、錯誤樣態案例與兩個小工具，可直接轉給只需查看補捐助的同仁；僅承辦人維護模式看得到這段說明）：")
+            st.code(SUBSIDY_VIEW_URL, language=None)
 
 
 SUBSIDY_VIEW_URL = "https://civilianforcedashboard.streamlit.app/?view=subsidy"
-SUBSIDY_VIEW_TABS = ["💰 補捐助業務", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✏️ 計畫書產生器", "✅ 核銷自我檢核"]
+SUBSIDY_VIEW_TABS = ["🏠 使用導覽", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✏️ 計畫書產生器", "✅ 核銷自我檢核"]
 
 
 def render_subsidy_view():
