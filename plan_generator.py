@@ -24,7 +24,7 @@ from subsidy_check import (
 
 # app.py 用這個數字判斷記憶體裡的模組是不是舊版。Streamlit Cloud 重新部署時
 # 常常只重跑 app.py，sys.modules 仍留著上一版 plan_generator。
-MODULE_REVISION = 3
+MODULE_REVISION = 4
 
 PLAN_TYPES = {
     "training": {
@@ -319,20 +319,57 @@ class PlanContext:
         return PLAN_TYPES[self.plan_type]["source_label"]
 
 
+def _missing_number(value):
+    """空白、None、NaN 或無法轉成數字，視為沒填。"""
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    try:
+        if value != value:
+            return True
+    except Exception:
+        return True
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return True
+    return False
+
+
+def budget_row_disposition(row):
+    """概算列要略過、標成錯誤，還是列入計算。
+
+    整列空白、沒有項目名稱、數量為 0（且沒有負數）的列略過，不進總額與檢查。
+    數量或單價是負數，或有項目名稱但單價空白、不是數字、不大於 0，則標成錯誤。
+    """
+    name = str((row or {}).get("name") or "").strip()
+    qty = _f((row or {}).get("qty"))
+    price = _f((row or {}).get("price"))
+    if qty < 0 or price < 0:
+        return "error"
+    if not name or qty == 0:
+        return "ignore"
+    if _missing_number((row or {}).get("price")) or price <= 0:
+        return "error"
+    return "keep"
+
+
 def normalize_items(rows, subsidy=0, source_label="議員建議補助款"):
     """把畫面輸入的列轉成概算項目。補助款依金額比例分配，並產生「用途＋經費來源」備註。
 
     使用者只填數量、單價、用途、類別與補助總額；各列不再另填補助款。
+    空白列、沒有項目名稱、數量為 0 的列不列入。負數與「有名稱卻沒有有效單價」仍保留，讓檢查能指出來。
     """
     items = []
     for r in rows or []:
+        if budget_row_disposition(r) == "ignore":
+            continue
         name = str(r.get("name") or "").strip()
         qty = _f(r.get("qty"))
         price = _f(r.get("price"))
         use = str(r.get("use") or "").strip()
         unit = str(r.get("unit") or "").strip()
-        if not name and qty == 0 and price == 0 and not use and not unit:
-            continue
         total = qty * price
         items.append({
             "name": name, "kind": r.get("kind") or "一般", "qty": qty, "unit": unit,
@@ -575,11 +612,11 @@ def check_plan(ctx, today=None):
             bits.append(f"「{item['name'] or '（未命名）'}」數量 {item['qty']:g}、單價 {item['price']:g}")
         f.append(_issue(
             ERROR, "數量或單價不是正數",
-            "、".join(bad_amount) + "。數量與單價都要大於 0，零或負數不能當成有效經費。",
+            "、".join(bad_amount) + "。負數不能列入經費；有項目名稱時，單價必須大於 0。",
             rule="經費概算表（數量與單價須為正數）",
             where=_budget_where(bad_amount),
-            comparison="；".join(bits) + "（規定都要大於 0）",
-            suggestion="請把數量與單價都改成大於 0，或刪除該列。",
+            comparison="；".join(bits) + "（數量與單價都要大於 0；數量為 0 或沒有項目名稱的列會自動略過）",
+            suggestion="請把數量與單價改成大於 0，或刪除該列。",
         ))
     allocated = sum(i["subsidy"] for i in ctx.items)
     if abs(allocated - sub) > 0.5:
