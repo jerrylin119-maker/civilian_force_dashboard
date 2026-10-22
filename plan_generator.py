@@ -22,6 +22,10 @@ from subsidy_check import (
     SELF_FUND_RATIO, SELF_FUND_THRESHOLD, OK, WARN, ERROR, Finding,
 )
 
+# app.py 用這個數字判斷記憶體裡的模組是不是舊版。Streamlit Cloud 重新部署時
+# 常常只重跑 app.py，sys.modules 仍留著上一版 plan_generator。
+MODULE_REVISION = 2
+
 PLAN_TYPES = {
     "training": {
         "label": "專業訓練活動（議員建議補助款）",
@@ -105,6 +109,11 @@ def add_months(d, months):
 def earliest_activity_date(today):
     """開始日期至少要在今天起 1 個月再加 7 天（含當天）。"""
     return add_months(today, 1) + timedelta(days=7)
+
+
+def submission_deadline(activity_start):
+    """活動類案件送到局本部的期限：活動開始日減 1 個日曆月，再減 7 天。"""
+    return add_months(activity_start, -1) - timedelta(days=7)
 
 
 def strip_activity_year(name):
@@ -384,19 +393,23 @@ def check_plan(ctx, today=None):
     else:
         lead = (ctx.start - today).days
         earliest = earliest_activity_date(today)
+        deadline = submission_deadline(ctx.start)
         if ctx.start < today:
             f.append(Finding(ERROR, "活動開始日期已過",
                              f"開始日期 {roc_date(ctx.start)} 早於今天 {abs(lead)} 天，請改期後再送審。"))
         elif ctx.start == today:
             f.append(Finding(ERROR, "活動開始日期就是今天", "已來不及完成大隊初審並送達局本部，請改期。"))
-        elif ctx.start < earliest:
-            need = (earliest - today).days
-            f.append(Finding(WARN, f"距離活動只剩 {lead} 天，不足 1 個月又 1 週",
-                             f"活動類案件要先經大隊初審再送局本部，開始日期至少要在今天起 1 個月再加 7 天"
-                             f"（{roc_date(earliest)}，約 {need} 天後）以後。縣府另要求活動舉辦日 5 日前送達縣府。"))
+        elif deadline < today:
+            late = (today - deadline).days
+            f.append(Finding(WARN, f"已超過送件期限，不足 1 個月又 1 週",
+                             f"送件期限是活動日減 1 個月再減 7 天（{roc_date(deadline)}），"
+                             f"今天已晚 {late} 天。開始日期至少要在今天起 1 個月再加 7 天"
+                             f"（{roc_date(earliest)}）以後，才來得及大隊初審並送達局本部。"
+                             f"縣府另要求活動舉辦日 5 日前送達縣府。"))
         else:
             f.append(Finding(OK, "活動日期已預留 1 個月又 1 週",
-                             f"距離活動還有 {lead} 天，足夠大隊初審後送達局本部（最早可為 {roc_date(earliest)}）。"))
+                             f"距離活動還有 {lead} 天。送件期限（活動日減 1 個月再減 7 天）為 {roc_date(deadline)}，"
+                             f"今天尚未超過。最早可辦理日為 {roc_date(earliest)}。"))
 
     # 4. 概算表
     if not ctx.items:

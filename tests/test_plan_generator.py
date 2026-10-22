@@ -250,6 +250,31 @@ class DateRuleTests(unittest.TestCase):
         self.assertIn("1 個月再加 7 天", hit[0].detail)
         self.assertNotIn("不足 1 個月」", hit[0].title)
 
+    def test_deadline_is_activity_minus_one_month_minus_seven_days(self):
+        self.assertEqual(pg.submission_deadline(date(2026, 11, 20)), date(2026, 10, 13))
+        self.assertEqual(pg.submission_deadline(date(2026, 12, 31)), date(2026, 11, 23))
+        late = _ctx(start=date(2026, 11, 20), end=date(2026, 11, 20))
+        hit = _levels(pg.check_plan(late, today=TODAY), "已超過送件期限")
+        self.assertEqual(hit[0].level, pg.WARN)
+        self.assertIn("115年10月13日", hit[0].detail)
+        ok = _ctx(start=date(2026, 12, 31), end=date(2026, 12, 31))
+        passed = _levels(pg.check_plan(ok, today=TODAY), "已預留 1 個月又 1 週")
+        self.assertEqual(passed[0].level, pg.OK)
+        self.assertIn("115年11月23日", passed[0].detail)
+
+    def test_lecturer_meal_and_nhi_allocation(self):
+        items = _items([
+            {"name": "講師鐘點費", "kind": "內聘鐘點費", "qty": 1, "price": 8000, "use": "授課"},
+            {"name": "膳費", "kind": "餐費", "qty": 1, "price": 6000, "use": "用餐"},
+            {"name": "二代健保補充保費", "kind": "二代健保補充保費", "qty": 1, "price": 1000, "use": "補充保費"},
+        ], subsidy=10000)
+        by_name = {item["name"]: item for item in items}
+        self.assertEqual(by_name["講師鐘點費"]["subsidy"], 5714)
+        self.assertEqual(by_name["膳費"]["subsidy"], 4286)
+        self.assertEqual(by_name["二代健保補充保費"]["subsidy"], 0)
+        self.assertEqual(by_name["二代健保補充保費"]["self"], 1000)
+        self.assertEqual(sum(item["subsidy"] for item in items), 10000)
+
     def test_exact_earliest_date_passes(self):
         earliest = pg.earliest_activity_date(TODAY)
         ctx = _ctx(start=earliest, end=earliest)
@@ -292,6 +317,50 @@ class ExampleTests(unittest.TestCase):
         xlsx_bytes = pg.build_xlsx(ctx)
         self.assertTrue(docx_bytes.startswith(b"PK"))
         self.assertTrue(xlsx_bytes.startswith(b"PK"))
+
+
+class AppLoaderTests(unittest.TestCase):
+    def test_app_loader_calls_normalize_items_with_subsidy(self):
+        import inspect
+        import app
+
+        pg_from_app = app.load_plan_generator()
+        self.assertIn("subsidy", inspect.signature(pg_from_app.normalize_items).parameters)
+        items = pg_from_app.normalize_items(
+            [
+                {"name": "講師鐘點費", "kind": "內聘鐘點費", "qty": 1, "price": 8000, "use": "授課"},
+                {"name": "膳費", "kind": "餐費", "qty": 1, "price": 6000, "use": "用餐"},
+                {"name": "二代健保補充保費", "kind": "二代健保補充保費", "qty": 1, "price": 1000, "use": "補充保費"},
+            ],
+            subsidy=10000,
+            source_label="議員建議補助款",
+        )
+        by_name = {item["name"]: item for item in items}
+        self.assertEqual(by_name["講師鐘點費"]["subsidy"], 5714)
+        self.assertEqual(by_name["膳費"]["subsidy"], 4286)
+        self.assertEqual(by_name["二代健保補充保費"]["subsidy"], 0)
+
+    def test_stale_module_without_subsidy_is_reloaded(self):
+        import app
+        import plan_generator as live
+
+        def stale_normalize(rows, source_label="議員建議補助款"):
+            return []
+
+        live.normalize_items = stale_normalize
+        live.MODULE_REVISION = 0
+        try:
+            loaded = app.load_plan_generator()
+            items = loaded.normalize_items(
+                [{"name": "場地", "kind": "一般", "qty": 1, "price": 1000, "use": "場地"}],
+                subsidy=1000,
+                source_label="議員建議補助款",
+            )
+            self.assertEqual(items[0]["subsidy"], 1000)
+            self.assertEqual(loaded.MODULE_REVISION, 2)
+        finally:
+            import importlib
+            importlib.reload(live)
 
 
 if __name__ == "__main__":

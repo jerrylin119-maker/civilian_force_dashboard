@@ -20,6 +20,31 @@ if not hasattr(sc, "PACKS"):
 if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get_subsidy_banner", "steps_from_editor_records", "ensure_content_packs")):
     db = importlib.reload(db)
 
+# 與上面同一個原因：重新部署後 sys.modules 裡的 plan_generator 可能還是舊版，
+# normalize_items 沒有 subsidy 參數，計畫書產生器一載入就 TypeError。
+_PLAN_GENERATOR_REVISION = 2
+
+
+def load_plan_generator():
+    """載入 plan_generator；若記憶體中是舊版就從磁碟重載。"""
+    import inspect
+    import plan_generator as pg
+
+    def _is_current(mod):
+        fn = getattr(mod, "normalize_items", None)
+        try:
+            params = tuple(inspect.signature(fn).parameters) if fn is not None else ()
+        except (TypeError, ValueError):
+            params = ()
+        return getattr(mod, "MODULE_REVISION", 0) == _PLAN_GENERATOR_REVISION and "subsidy" in params
+
+    if not _is_current(pg):
+        pg = importlib.reload(pg)
+    return pg
+
+
+load_plan_generator()
+
 # 頁面配置
 # 補捐助專區（?view=subsidy）使用自己的分頁標題與圖示，這樣在瀏覽器歷史、書籤、分頁列
 # 才分得出和主網站（業務知識動態看板）是不同的網頁。
@@ -1361,7 +1386,7 @@ def render_settlement_check_page():
 
 def _apply_plan_preset(ver, preset):
     """把計畫書表單設成初始、空白或範例。欄位寫進下一個版本的 widget key，避免清空後殘留。"""
-    import plan_generator as pg
+    pg = load_plan_generator()
     from datetime import date, timedelta
 
     today = date.today()
@@ -1429,7 +1454,7 @@ def render_plan_generator_page():
 
     先套用申請階段的規則檢查。輸入只留在目前瀏覽器分頁的記憶體中，不寫入資料庫、不上傳。
     """
-    import plan_generator as pg
+    pg = load_plan_generator()
 
     st.markdown("""
     <div style="background: linear-gradient(to right, #eff6ff, #eef2ff); border: 1px solid #bfdbfe; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.2rem;">
