@@ -4,6 +4,7 @@
 import io
 import unittest
 from datetime import date, timedelta
+from pathlib import Path
 
 import plan_generator as pg
 
@@ -209,22 +210,59 @@ class WordingTests(unittest.TestCase):
         self.assertIn("宣導品", hit[0].detail)
         self.assertIn("獎品", hit[0].detail)
 
-    def test_zero_and_negative_qty_or_price_error_and_kept(self):
+    def test_zero_qty_blank_name_and_empty_rows_are_ignored(self):
         rows = [
+            {"name": "", "kind": "一般", "qty": 0, "price": 0, "unit": "", "use": ""},
+            {"name": "", "kind": "餐費", "qty": 3, "price": 100, "use": "用餐"},
             {"name": "空白數量", "kind": "一般", "qty": 0, "price": 100, "use": "測試"},
+            {"name": "正常", "kind": "一般", "qty": 1, "price": 1000, "use": "測試"},
+        ]
+        items = _items(rows, subsidy=1000)
+        self.assertEqual([i["name"] for i in items], ["正常"])
+        self.assertEqual(items[0]["subsidy"], 1000)
+        self.assertEqual(items[0]["total"], 1000)
+        ctx = _ctx(items=rows, subsidy=1000)
+        self.assertEqual(ctx.total, 1000)
+        titles = [f.title for f in pg.check_plan(ctx, today=TODAY)]
+        self.assertNotIn("數量或單價不是正數", titles)
+        self.assertEqual(pg.budget_row_disposition(rows[0]), "ignore")
+        self.assertEqual(pg.budget_row_disposition(rows[1]), "ignore")
+        self.assertEqual(pg.budget_row_disposition(rows[2]), "ignore")
+
+    def test_negative_and_named_missing_price_still_error(self):
+        rows = [
             {"name": "負單價", "kind": "一般", "qty": 2, "price": -50, "use": "測試"},
+            {"name": "沒單價", "kind": "一般", "qty": 2, "price": None, "use": "測試"},
+            {"name": "零單價", "kind": "一般", "qty": 1, "price": 0, "use": "測試"},
+            {"name": "負數量", "kind": "一般", "qty": -1, "price": 80, "use": "測試"},
+            {"name": "", "kind": "一般", "qty": -2, "price": 10, "use": ""},
             {"name": "正常", "kind": "一般", "qty": 1, "price": 1000, "use": "測試"},
         ]
         items = _items(rows, subsidy=500)
-        self.assertEqual([i["name"] for i in items], ["空白數量", "負單價", "正常"])
+        self.assertEqual([i["name"] for i in items], ["負單價", "沒單價", "零單價", "負數量", "", "正常"])
+        self.assertEqual(items[-1]["subsidy"], 500)
+        self.assertEqual(items[0]["subsidy"], 0)
         ctx = _ctx(items=rows, subsidy=500)
         hit = _levels(pg.check_plan(ctx, today=TODAY), "數量或單價不是正數")
         self.assertEqual(hit[0].level, pg.ERROR)
-        self.assertIn("空白數量", hit[0].detail)
         self.assertIn("負單價", hit[0].detail)
-        self.assertEqual(items[2]["subsidy"], 500)
-        self.assertEqual(items[0]["subsidy"], 0)
-        self.assertEqual(items[1]["subsidy"], 0)
+        self.assertIn("沒單價", hit[0].detail)
+        self.assertIn("負數量", hit[0].detail)
+        self.assertIn("零單價", hit[0].detail)
+        self.assertIn("（未命名）", hit[0].detail)
+        self.assertNotIn("正常", hit[0].detail)
+
+    def test_deleting_a_budget_row_removes_it_from_the_total(self):
+        rows = [
+            {"name": "便當", "kind": "餐費", "qty": 60, "price": 100, "use": "用餐"},
+            {"name": "礦泉水", "kind": "一般", "qty": 10, "price": 150, "use": "飲用"},
+            {"name": "棚架", "kind": "一般", "qty": 2, "price": 3500, "use": "休息"},
+        ]
+        before = _ctx(items=rows, subsidy=10000)
+        after = _ctx(items=[rows[0], rows[2]], subsidy=10000)
+        self.assertEqual(before.total - after.total, 1500)
+        self.assertNotIn("礦泉水", [i["name"] for i in after.items])
+        self.assertEqual(sum(i["subsidy"] for i in after.items), 10000)
 
 
 class DateRuleTests(unittest.TestCase):
@@ -383,6 +421,37 @@ class ComplianceReportTests(unittest.TestCase):
         self.assertEqual(banner, pg.ALL_CLEAR_MESSAGE)
 
 
+class GridEditorTests(unittest.TestCase):
+    def test_deleted_rows_stay_gone_after_rerun_and_totals_update(self):
+        from streamlit.testing.v1 import AppTest
+
+        app_path = str(Path(__file__).resolve().parents[1] / "app.py")
+        at = AppTest.from_file(app_path, default_timeout=90)
+        at.query_params["view"] = "subsidy"
+        at.session_state["top_main_nav"] = "✏️ 計畫書產生器"
+        at.run()
+        self.assertEqual(list(at.exception), [])
+        at.button(key="plan_load_sample").click().run()
+        self.assertEqual(list(at.exception), [])
+        self.assertEqual({m.label: m.value for m in at.metric}["總經費"], "25,500")
+        self.assertEqual(len(at.session_state["plan_items"]), 4)
+        self.assertEqual(len(at.session_state["plan_courses"]), 3)
+
+        kept = at.session_state["plan_items"]
+        kept = kept[kept["項目"] != "礦泉水"].reset_index(drop=True)
+        at.session_state["plan_items"] = kept
+        at.session_state["plan_courses"] = at.session_state["plan_courses"].iloc[1:].reset_index(drop=True)
+        at.run()
+        self.assertEqual(list(at.exception), [])
+        self.assertEqual({m.label: m.value for m in at.metric}["總經費"], "24,000")
+        self.assertNotIn("礦泉水", list(at.session_state["plan_items"]["項目"]))
+        self.assertEqual(len(at.session_state["plan_courses"]), 2)
+        at.run()
+        self.assertEqual({m.label: m.value for m in at.metric}["總經費"], "24,000")
+        self.assertEqual(len(at.session_state["plan_items"]), 3)
+        self.assertEqual(len(at.session_state["plan_courses"]), 2)
+
+
 class AppLoaderTests(unittest.TestCase):
     def test_app_loader_calls_normalize_items_with_subsidy(self):
         import inspect
@@ -421,7 +490,7 @@ class AppLoaderTests(unittest.TestCase):
                 source_label="議員建議補助款",
             )
             self.assertEqual(items[0]["subsidy"], 1000)
-            self.assertEqual(loaded.MODULE_REVISION, 3)
+            self.assertEqual(loaded.MODULE_REVISION, 4)
         finally:
             import importlib
             importlib.reload(live)

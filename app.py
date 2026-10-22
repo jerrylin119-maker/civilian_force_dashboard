@@ -22,7 +22,7 @@ if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get
 
 # 與上面同一個原因：重新部署後 sys.modules 裡的 plan_generator 可能還是舊版，
 # normalize_items 沒有 subsidy 參數，計畫書產生器一載入就 TypeError。
-_PLAN_GENERATOR_REVISION = 3
+_PLAN_GENERATOR_REVISION = 4
 
 
 def load_plan_generator():
@@ -1395,6 +1395,26 @@ def render_settlement_check_page():
             st.success("✅ 全部項目都已完成，可以送大隊初審。")
 
 
+def _plan_data_editor(state_key, editor_key, column_config):
+    """可新增、刪除的表格。編輯結果寫回 session_state，避免下次重算又把刪掉的列補回來。
+
+    Streamlit 在 num_rows 為 dynamic 時，元件身分含當下的表格內容。
+    把編輯後的表存回去，下一輪才會沿用刪除與新增，而不是套用舊的列。
+    索引重排成 0、1、2…，刪除後才能再新增列。
+    """
+    edited = st.data_editor(
+        st.session_state[state_key],
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key=editor_key,
+        column_config=column_config,
+    )
+    persisted = edited.reset_index(drop=True)
+    st.session_state[state_key] = persisted
+    return persisted
+
+
 def _apply_plan_preset(ver, preset):
     """把計畫書表單設成初始、空白或範例。欄位寫進下一個版本的 widget key，避免清空後殘留。"""
     pg = load_plan_generator()
@@ -1523,13 +1543,13 @@ def render_plan_generator_page():
 
     st.markdown("#### ② 課程表")
     st.caption("每一列請選日期（須在開始日期與結束日期之間；沒填的列會先用開始日期）。"
-               "只填了時間、課程內容還是空白的列也會保留。產出時依日期、時間排序。")
+               "只填了時間、課程內容還是空白的列也會保留。產出時依日期、時間排序。"
+               "要刪除整列，請勾選該列左側方框後按刪除；表格下方可新增一列。")
     date_bounds = {}
     if d_start and d_end and d_end >= d_start:
         date_bounds = {"min_value": d_start, "max_value": d_end}
-    courses_df = st.data_editor(
-        st.session_state["plan_courses"], num_rows="dynamic", use_container_width=True,
-        key=f"plan_course_editor_{ver}",
+    courses_df = _plan_data_editor(
+        "plan_courses", f"plan_course_editor_{ver}",
         column_config={
             "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD", **date_bounds),
             "時間": st.column_config.TextColumn("時間", help="例：09:10－12:00"),
@@ -1540,11 +1560,14 @@ def render_plan_generator_page():
     subsidy = st.number_input("議員建議補助款（元）", min_value=0, step=1000, key=f"plan_sub_{ver}")
     st.caption("每個品項只填數量、單價、用途說明與類別。補助款填上方的總額即可，"
                "系統依各項金額比例分配（整數元，最後一個可分配項目吸收餘數），其餘為自籌款。"
-               "二代健保補充保費不分配補助款、全數自籌。備註（用途＋經費來源）由系統自動產生。")
-    items_df = st.data_editor(
-        st.session_state["plan_items"], num_rows="dynamic", use_container_width=True, key=f"plan_item_editor_{ver}",
+               "二代健保補充保費不分配補助款、全數自籌。備註（用途＋經費來源）由系統自動產生。"
+               "整列空白、沒有項目名稱，或數量為 0 的列不計入金額與檢查；"
+               "數量或單價是負數，或有名稱卻沒有有效單價，仍會標成錯誤。"
+               "勾選列左側方框後按刪除即可移除，表格下方可新增一列。")
+    items_df = _plan_data_editor(
+        "plan_items", f"plan_item_editor_{ver}",
         column_config={
-            "類別": st.column_config.SelectboxColumn("類別", options=pg.ITEM_KINDS, required=True),
+            "類別": st.column_config.SelectboxColumn("類別", options=pg.ITEM_KINDS, required=False),
             "數量": st.column_config.NumberColumn("數量", step=1, format="%d"),
             "單價": st.column_config.NumberColumn("單價", step=10, format="%d"),
         },
