@@ -22,13 +22,19 @@ if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get
 
 # 與上面同一個原因：重新部署後 sys.modules 裡的 plan_generator 可能還是舊版，
 # normalize_items 沒有 subsidy 參數，計畫書產生器一載入就 TypeError。
-_PLAN_GENERATOR_REVISION = 2
+_PLAN_GENERATOR_REVISION = 3
 
 
 def load_plan_generator():
     """載入 plan_generator；若記憶體中是舊版就從磁碟重載。"""
     import inspect
     import plan_generator as pg
+    import subsidy_check as chk
+
+    finding_fields = getattr(chk.Finding, "__dataclass_fields__", {})
+    if "suggestion" not in finding_fields or "where" not in finding_fields:
+        chk = importlib.reload(chk)
+        pg = importlib.reload(pg)
 
     def _is_current(mod):
         fn = getattr(mod, "normalize_items", None)
@@ -36,7 +42,12 @@ def load_plan_generator():
             params = tuple(inspect.signature(fn).parameters) if fn is not None else ()
         except (TypeError, ValueError):
             params = ()
-        return getattr(mod, "MODULE_REVISION", 0) == _PLAN_GENERATOR_REVISION and "subsidy" in params
+        return (
+            getattr(mod, "MODULE_REVISION", 0) == _PLAN_GENERATOR_REVISION
+            and "subsidy" in params
+            and hasattr(mod, "format_compliance_item")
+            and hasattr(mod, "ALL_CLEAR_MESSAGE")
+        )
 
     if not _is_current(pg):
         pg = importlib.reload(pg)
@@ -1595,22 +1606,29 @@ def render_plan_generator_page():
                       f"{ctx.self_fund / ctx.total:.1%}" if ctx.total else None, delta_color="off")
 
     findings = pg.check_plan(ctx)
-    n_err = sum(1 for f in findings if f.level == pg.ERROR)
-    n_warn = sum(1 for f in findings if f.level == pg.WARN)
-    if n_err:
-        st.error(f"❌ 有 {n_err} 項不符規定，建議修正後再送審（仍可先下載草稿修改）。")
-    elif n_warn:
-        st.warning(f"⚠️ 規定檢查通過，另有 {n_warn} 項提醒。")
+    kind, banner = pg.compliance_banner(findings)
+    errors = [f for f in findings if f.level == pg.ERROR]
+    warns = [f for f in findings if f.level == pg.WARN]
+    oks = [f for f in findings if f.level == pg.OK]
+    if kind == "pass":
+        st.success(banner, icon="✅")
+    elif kind == "error":
+        st.error(f"❌ {banner}")
+        for f in errors:
+            st.error(pg.format_compliance_item(f))
+        if warns:
+            st.markdown("**提醒（不阻擋匯出）**")
+            for f in warns:
+                st.warning(pg.format_compliance_item(f))
     else:
-        st.success("✅ 規定檢查全部通過。")
-    for f in findings:
-        line = f"**{f.title}**" + (f"：{f.detail}" if f.detail else "")
-        if f.level == pg.ERROR:
-            st.error(line, icon="❌")
-        elif f.level == pg.WARN:
-            st.warning(line, icon="⚠️")
-        else:
-            st.success(line, icon="✅")
+        st.warning(f"⚠️ {banner}")
+        for f in warns:
+            st.warning(pg.format_compliance_item(f))
+    if oks:
+        with st.expander(f"已通過的檢查（{len(oks)} 項）", expanded=(kind == "pass")):
+            for f in oks:
+                line = f"**{f.title}**" + (f"：{f.detail}" if f.detail else "")
+                st.markdown(line)
 
     ready = bool(unit.strip() and name.strip() and items)
     if not ready:
