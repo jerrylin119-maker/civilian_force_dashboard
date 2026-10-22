@@ -22,6 +22,10 @@ from subsidy_check import (
     SELF_FUND_RATIO, SELF_FUND_THRESHOLD, OK, WARN, ERROR, Finding,
 )
 
+# app.py 用這個數字判斷記憶體裡的模組是不是舊版。Streamlit Cloud 重新部署時
+# 常常只重跑 app.py，sys.modules 仍留著上一版 plan_generator。
+MODULE_REVISION = 3
+
 PLAN_TYPES = {
     "training": {
         "label": "專業訓練活動（議員建議補助款）",
@@ -105,6 +109,11 @@ def add_months(d, months):
 def earliest_activity_date(today):
     """開始日期至少要在今天起 1 個月再加 7 天（含當天）。"""
     return add_months(today, 1) + timedelta(days=7)
+
+
+def submission_deadline(activity_start):
+    """活動類案件送到局本部的期限：活動開始日減 1 個日曆月，再減 7 天。"""
+    return add_months(activity_start, -1) - timedelta(days=7)
 
 
 def strip_activity_year(name):
@@ -345,6 +354,66 @@ def _f(v):
         return 0.0
 
 
+# 注意要點、錯誤樣態在網頁上的編號會隨承辦人增刪而變，這裡以標題對照，不寫死編號。
+RULE_WORDING = "注意要點「計畫書命名與用字」；錯誤樣態「計畫名稱出現「聯誼」「餐敘」「聯歡」「健身」等字眼」"
+RULE_AWARD = "注意要點「計畫書內容：課程表與敘獎」；錯誤樣態「計畫書載明行政獎勵字句」"
+RULE_COURSE = "注意要點「計畫書內容：課程表與敘獎」；錯誤樣態「研習、訓練、環境教育活動未附課程表」"
+RULE_RATIO = "注意要點「經費比例上限（自籌款、餐費紀念品、雜支）」"
+RULE_SELF_FUND = RULE_RATIO + "；錯誤樣態「自籌款未達總經費 30%」"
+RULE_MEAL = RULE_RATIO + "；錯誤樣態「餐費及紀念品超過申請補助金額 50%（或未分來源計算）」"
+RULE_DEADLINE = "注意要點「申請流程與發文單位」；錯誤樣態「活動類案件未於活動 1 個月前送達局本部」"
+RULE_NHI = "注意要點「二代健保補充保費與概算表備註欄」；錯誤樣態「二代健保補充保費用補助款支應」"
+RULE_REMARK = "注意要點「二代健保補充保費與概算表備註欄」；錯誤樣態「概算表備註欄位不清楚」"
+RULE_GIFT = "注意要點「品項名稱適法性（宣導品 vs. 贈品/獎品）」"
+RULE_INTERNAL = "注意要點「內聘教官、助教鐘點費」"
+RULE_PROCUREMENT = "注意要點「陳報單：採購法規範（總經費逾 15 萬元）」；錯誤樣態「總經費逾 15 萬元，未敘明採購法依據或未加會政風室」"
+RULE_EQUIPMENT = "錯誤樣態「設備類案件缺廠商估價單或縣府審核表」（活動類補助款不得用於資本門）"
+RULE_MEAL_QTY = "注意要點「便當、活動耗材等合理性說明」；錯誤樣態「概算表數量與用途說明不一致」"
+ALL_CLEAR_MESSAGE = "計畫符合現行補捐助規定，可以開始匯出"
+
+
+def _issue(level, title, detail, *, rule, where, comparison, suggestion):
+    return Finding(level, title, detail, rule=rule, where=where, comparison=comparison, suggestion=suggestion)
+
+
+def _budget_where(names):
+    labels = [name or "（未命名）" for name in names]
+    if not labels:
+        return "經費概算表"
+    return "經費概算表" + "".join(f"「{name}」" for name in labels)
+
+
+def compliance_banner(findings):
+    """回傳 (pass / warn / error, 標題訊息)。全部通過時用固定文句。"""
+    n_err = sum(1 for item in findings if item.level == ERROR)
+    n_warn = sum(1 for item in findings if item.level == WARN)
+    if n_err:
+        return "error", f"有 {n_err} 項不符規定，請依下列說明逐項修正後再送審（仍可先下載草稿）。"
+    if n_warn:
+        return "warn", f"沒有不符規定的項目，另有 {n_warn} 項提醒，請另外確認。"
+    return "pass", ALL_CLEAR_MESSAGE
+
+
+def format_compliance_item(finding):
+    """把單一檢查結果排成：規則、位置、現況與規定、修正建議。"""
+    lines = [f"**{finding.title}**"]
+    rule = getattr(finding, "rule", "") or ""
+    where = getattr(finding, "where", "") or ""
+    comparison = getattr(finding, "comparison", "") or ""
+    suggestion = getattr(finding, "suggestion", "") or ""
+    if rule:
+        lines.append(f"規則：{rule}")
+    if where:
+        lines.append(f"位置：{where}")
+    if comparison:
+        lines.append(f"現況與規定：{comparison}")
+    if suggestion:
+        lines.append(f"修正建議：{suggestion}")
+    elif finding.detail:
+        lines.append(finding.detail)
+    return "\n\n".join(lines)
+
+
 # ---------------------------------------------------------------- 規則檢查（申請階段）
 def check_plan(ctx, today=None):
     today = today or date.today()
@@ -355,166 +424,408 @@ def check_plan(ctx, today=None):
                         [i["name"] for i in ctx.items])
     bad = [w for w in FORBIDDEN_WORDS if w in text_all]
     if bad:
-        f.append(Finding(ERROR, "名稱或內容出現不得使用的字眼", f"請移除：{'、'.join(bad)}。計畫須以社會公益、教育、訓練、研習為主。"))
+        field_hits = []
+        for label, value in (
+            ("活動名稱", ctx.name), ("申請單位", ctx.unit), ("緣由", ctx.background),
+            ("目的", ctx.purpose), ("訓練方式", ctx.method), ("規定事項", ctx.rules),
+        ):
+            if any(word in (value or "") for word in bad):
+                field_hits.append(label)
+        item_hits = [i["name"] or "（未命名）" for i in ctx.items if any(word in (i["name"] or "") for word in bad)]
+        where = "、".join(field_hits)
+        if item_hits:
+            where = (where + "、" if where else "") + _budget_where(item_hits)
+        f.append(_issue(
+            ERROR, "名稱或內容出現不得使用的字眼",
+            f"請移除：{'、'.join(bad)}。計畫須以社會公益、教育、訓練、研習為主。",
+            rule=RULE_WORDING,
+            where=where or "活動名稱或計畫內容",
+            comparison=f"出現不得使用的字眼：{'、'.join(bad)}",
+            suggestion="請移除這些字眼，並改以社會公益、教育、訓練或研習來敘述。",
+        ))
     else:
         f.append(Finding(OK, "名稱與內容沒有「聯誼、餐敘、聯歡、健身」等字眼", ""))
-    if "獎勵" in ctx.rules or "敘獎" in ctx.rules or "獎勵" in ctx.background or "獎勵" in ctx.purpose:
-        f.append(Finding(ERROR, "計畫書內不得出現行政獎勵／敘獎字句", "敘獎事項只在陳報單敘明並加會人事室。"))
+    award_fields = []
+    if "獎勵" in (ctx.background or ""):
+        award_fields.append("緣由")
+    if "獎勵" in (ctx.purpose or ""):
+        award_fields.append("目的")
+    if "獎勵" in (ctx.rules or "") or "敘獎" in (ctx.rules or ""):
+        award_fields.append("規定事項")
+    if award_fields:
+        f.append(_issue(
+            ERROR, "計畫書內不得出現行政獎勵／敘獎字句",
+            "敘獎事項只在陳報單敘明並加會人事室。",
+            rule=RULE_AWARD,
+            where="、".join(award_fields),
+            comparison="內容出現「獎勵」或「敘獎」",
+            suggestion="請從計畫書刪除敘獎字句，改在陳報單敘明並加會人事室。",
+        ))
 
     # 2. 必填
     miss = [n for n, v in [("申請單位", ctx.unit), ("活動名稱", ctx.name), ("地點", ctx.place), ("參訓對象", ctx.audience)] if not str(v).strip()]
     if miss:
-        f.append(Finding(ERROR, "尚有必填欄位未填", "、".join(miss)))
+        f.append(_issue(
+            ERROR, "尚有必填欄位未填", "、".join(miss),
+            rule="計畫書必填欄位（申請單位、活動名稱、地點、參訓對象）",
+            where="、".join(miss),
+            comparison="尚未填寫：" + "、".join(miss),
+            suggestion="請補上這些欄位後再檢查。",
+        ))
 
     # 2b. 活動名稱若已含年度，標題會自動拿掉，避免「115年度一一五年度…」
     raw_name = ctx.name.strip()
     if raw_name and ctx.name_for_title != raw_name:
         if not ctx.name_for_title:
-            f.append(Finding(ERROR, "活動名稱只寫了年度",
-                             "請改填活動名稱本身，不必再寫「115年度」或「一一五年度」，標題會自動加上年度。"))
+            f.append(_issue(
+                ERROR, "活動名稱只寫了年度",
+                "請改填活動名稱本身，不必再寫「115年度」或「一一五年度」，標題會自動加上年度。",
+                rule="注意要點「計畫書命名與用字」",
+                where="活動名稱",
+                comparison=f"目前只寫了「{raw_name}」",
+                suggestion="請改填活動名稱本身，不必再寫年度，標題會自動加上。",
+            ))
         else:
-            f.append(Finding(WARN, "活動名稱含有年度，已自動省略",
-                             f"標題使用「{ctx.title2}」，避免年度重複。"))
+            f.append(_issue(
+                WARN, "活動名稱含有年度，已自動省略",
+                f"標題使用「{ctx.title2}」，避免年度重複。",
+                rule="注意要點「計畫書命名與用字」",
+                where="活動名稱",
+                comparison=f"原名稱「{raw_name}」含年度，標題改用「{ctx.title2}」",
+                suggestion="可維持現況（系統已省略年度）；若要自行修正，請把活動名稱裡的年度拿掉。",
+            ))
 
     # 3. 日期（須預留 1 個月 + 7 天給大隊初審，再送局本部）
     if ctx.start is None or ctx.end is None:
-        f.append(Finding(ERROR, "尚未選擇開始或結束日期", "請選擇活動日期。"))
+        missing_dates = []
+        if ctx.start is None:
+            missing_dates.append("開始日期")
+        if ctx.end is None:
+            missing_dates.append("結束日期")
+        f.append(_issue(
+            ERROR, "尚未選擇開始或結束日期", "請選擇活動日期。",
+            rule=RULE_DEADLINE,
+            where="活動日期",
+            comparison="尚未選擇：" + "、".join(missing_dates),
+            suggestion="請選擇開始與結束日期；開始日須在今天起 1 個月又 1 週以後。",
+        ))
     elif ctx.end < ctx.start:
-        f.append(Finding(ERROR, "結束日期早於開始日期", "請修正日期區間，結束日期不可早於開始日期。"))
+        f.append(_issue(
+            ERROR, "結束日期早於開始日期", "請修正日期區間，結束日期不可早於開始日期。",
+            rule="活動日期區間",
+            where="活動日期",
+            comparison=f"結束日期 {ctx.end.isoformat()} 早於開始日期 {ctx.start.isoformat()}",
+            suggestion="請把結束日期改到開始日期當天或之後。",
+        ))
     else:
         lead = (ctx.start - today).days
         earliest = earliest_activity_date(today)
+        deadline = submission_deadline(ctx.start)
         if ctx.start < today:
-            f.append(Finding(ERROR, "活動開始日期已過",
-                             f"開始日期 {roc_date(ctx.start)} 早於今天 {abs(lead)} 天，請改期後再送審。"))
+            f.append(_issue(
+                ERROR, "活動開始日期已過",
+                f"開始日期 {roc_date(ctx.start)} 早於今天 {abs(lead)} 天，請改期後再送審。",
+                rule=RULE_DEADLINE,
+                where="活動日期",
+                comparison=f"開始日期 {ctx.start.isoformat()}，今日 {today.isoformat()} 已過 {abs(lead)} 天",
+                suggestion=f"請把開始日期改到 {earliest.isoformat()}（含）以後再送審。",
+            ))
         elif ctx.start == today:
-            f.append(Finding(ERROR, "活動開始日期就是今天", "已來不及完成大隊初審並送達局本部，請改期。"))
-        elif ctx.start < earliest:
-            need = (earliest - today).days
-            f.append(Finding(WARN, f"距離活動只剩 {lead} 天，不足 1 個月又 1 週",
-                             f"活動類案件要先經大隊初審再送局本部，開始日期至少要在今天起 1 個月再加 7 天"
-                             f"（{roc_date(earliest)}，約 {need} 天後）以後。縣府另要求活動舉辦日 5 日前送達縣府。"))
+            f.append(_issue(
+                ERROR, "活動開始日期就是今天", "已來不及完成大隊初審並送達局本部，請改期。",
+                rule=RULE_DEADLINE,
+                where="活動日期",
+                comparison=f"開始日期 {ctx.start.isoformat()} 就是今日 {today.isoformat()}",
+                suggestion=f"請把開始日期改到 {earliest.isoformat()}（含）以後。",
+            ))
+        elif deadline < today:
+            late = (today - deadline).days
+            f.append(_issue(
+                WARN, "已超過送件期限，不足 1 個月又 1 週",
+                f"送件期限是活動日減 1 個月再減 7 天（{roc_date(deadline)}），"
+                f"今天已晚 {late} 天。開始日期至少要在今天起 1 個月再加 7 天"
+                f"（{roc_date(earliest)}）以後，才來得及大隊初審並送達局本部。"
+                f"縣府另要求活動舉辦日 5 日前送達縣府。",
+                rule=RULE_DEADLINE,
+                where="活動日期",
+                comparison=f"屆時送局期限 {deadline.isoformat()}，今日 {today.isoformat()} 已逾 {late} 天",
+                suggestion=f"請把開始日期改到 {earliest.isoformat()}（含）以後，才來得及大隊初審並送達局本部。",
+            ))
         else:
             f.append(Finding(OK, "活動日期已預留 1 個月又 1 週",
-                             f"距離活動還有 {lead} 天，足夠大隊初審後送達局本部（最早可為 {roc_date(earliest)}）。"))
+                             f"距離活動還有 {lead} 天。送件期限（活動日減 1 個月再減 7 天）為 {roc_date(deadline)}，"
+                             f"今天尚未超過。最早可辦理日為 {roc_date(earliest)}。"))
 
     # 4. 概算表
     if not ctx.items:
-        f.append(Finding(ERROR, "概算表沒有任何項目", "請至少輸入一個經費項目。"))
+        f.append(_issue(
+            ERROR, "概算表沒有任何項目", "請至少輸入一個經費項目。",
+            rule="經費概算表",
+            where="經費概算表",
+            comparison="沒有任何經費項目",
+            suggestion="請至少輸入一個經費項目（數量、單價、用途說明與類別）。",
+        ))
         return f
     total, sub = ctx.total, ctx.subsidy
-    bad_amount = [i["name"] or "（未命名）" for i in ctx.items if i["qty"] <= 0 or i["price"] <= 0]
+    bad_amount_items = [i for i in ctx.items if i["qty"] <= 0 or i["price"] <= 0]
+    bad_amount = [i["name"] or "（未命名）" for i in bad_amount_items]
     if bad_amount:
-        f.append(Finding(ERROR, "數量或單價不是正數",
-                         "、".join(bad_amount) + "。數量與單價都要大於 0，零或負數不能當成有效經費。"))
+        bits = []
+        for item in bad_amount_items:
+            bits.append(f"「{item['name'] or '（未命名）'}」數量 {item['qty']:g}、單價 {item['price']:g}")
+        f.append(_issue(
+            ERROR, "數量或單價不是正數",
+            "、".join(bad_amount) + "。數量與單價都要大於 0，零或負數不能當成有效經費。",
+            rule="經費概算表（數量與單價須為正數）",
+            where=_budget_where(bad_amount),
+            comparison="；".join(bits) + "（規定都要大於 0）",
+            suggestion="請把數量與單價都改成大於 0，或刪除該列。",
+        ))
     allocated = sum(i["subsidy"] for i in ctx.items)
     if abs(allocated - sub) > 0.5:
         if any(i["kind"] == NHI_KIND for i in ctx.items) and not any(_eligible_for_subsidy(i) for i in ctx.items):
-            f.append(Finding(ERROR, "補助款無法分配",
-                             "二代健保補充保費不得使用補助款，請再填其他可分配的項目，或把補助金額改為 0。"))
+            f.append(_issue(
+                ERROR, "補助款無法分配",
+                "二代健保補充保費不得使用補助款，請再填其他可分配的項目，或把補助金額改為 0。",
+                rule=RULE_NHI,
+                where="議員建議補助款",
+                comparison=f"補助金額 {money(sub)} 元，可分配項目合計 0 元",
+                suggestion="請再填其他可分配的項目，或把補助金額改為 0。二代健保補充保費全數自籌。",
+            ))
         else:
-            f.append(Finding(ERROR, "補助款無法依比例分配",
-                             f"已分配 {money(allocated)} 元，補助金額 {money(sub)} 元。請確認各項數量、單價都是正數。"))
+            f.append(_issue(
+                ERROR, "補助款無法依比例分配",
+                f"已分配 {money(allocated)} 元，補助金額 {money(sub)} 元。請確認各項數量、單價都是正數。",
+                rule="補助款依各項金額比例分配",
+                where="議員建議補助款",
+                comparison=f"已分配 {money(allocated)} 元，補助金額 {money(sub)} 元",
+                suggestion="請確認各項數量、單價都是正數，使分配合計等於補助金額。",
+            ))
     else:
         f.append(Finding(OK, "補助款已依各項金額比例分配", f"加總 {money(sub)} 元，與議員建議補助款相同。"))
     eligible_base = sum(i["total"] for i in ctx.items if _eligible_for_subsidy(i))
     if sub > eligible_base + 0.5:
         extra = "二代健保補充保費不分配補助款、全數自籌。" if any(i["kind"] == NHI_KIND for i in ctx.items) else ""
-        f.append(Finding(ERROR, "補助金額超過可分配項目的合計",
-                         f"可分配項目合計 {money(eligible_base)} 元，補助金額 {money(sub)} 元。{extra}"))
-    over = [i["name"] or "（未命名）" for i in ctx.items if i["subsidy"] > i["total"] + 0.5]
+        f.append(_issue(
+            ERROR, "補助金額超過可分配項目的合計",
+            f"可分配項目合計 {money(eligible_base)} 元，補助金額 {money(sub)} 元。{extra}",
+            rule="補助款依各項金額比例分配",
+            where="議員建議補助款",
+            comparison=f"可分配項目合計 {money(eligible_base)} 元，補助金額 {money(sub)} 元",
+            suggestion="請調降補助金額，或增加可分配項目，使補助金額不高於可分配合計。",
+        ))
+    over_items = [i for i in ctx.items if i["subsidy"] > i["total"] + 0.5]
+    over = [i["name"] or "（未命名）" for i in over_items]
     if over:
-        f.append(Finding(ERROR, "有項目的補助款支應大於該項合計", "、".join(over)))
+        bits = [
+            f"「{item['name'] or '（未命名）'}」補助款支應 {money(item['subsidy'])} 元，該項合計 {money(item['total'])} 元"
+            for item in over_items
+        ]
+        f.append(_issue(
+            ERROR, "有項目的補助款支應大於該項合計", "、".join(over),
+            rule="補助款依各項金額比例分配",
+            where=_budget_where(over),
+            comparison="；".join(bits),
+            suggestion="請調降補助金額，或提高該項數量、單價，使補助款支應不高於該項合計。",
+        ))
     if sub > total + 0.5:
-        f.append(Finding(ERROR, "補助金額大於總經費",
-                         f"補助 {money(sub)} 元，總經費 {money(total)} 元。請調降補助金額或增加項目，自籌款不會以負數表示。"))
+        f.append(_issue(
+            ERROR, "補助金額大於總經費",
+            f"補助 {money(sub)} 元，總經費 {money(total)} 元。請調降補助金額或增加項目，自籌款不會以負數表示。",
+            rule="補助金額不得大於總經費",
+            where="議員建議補助款",
+            comparison=f"補助 {money(sub)} 元，總經費 {money(total)} 元，已超過 {money(sub - total)} 元",
+            suggestion="請調降補助金額或增加項目。自籌款不會以負數表示。",
+        ))
     elif sub > SELF_FUND_THRESHOLD:
         # 5. 自籌 30%（補助已超過總經費時不再計算，避免自籌出現負數）
         self_amt = total - sub
         ratio = self_amt / total if total else 0
         if ratio + 1e-9 < SELF_FUND_RATIO:
             need = total * SELF_FUND_RATIO - self_amt
-            f.append(Finding(ERROR, "補助超過 2 萬元，自籌款未達總經費 30%",
-                             f"自籌 {money(self_amt)} 元，占 {ratio:.1%}，至少還差 {money(need)} 元。"))
+            f.append(_issue(
+                ERROR, "補助超過 2 萬元，自籌款未達總經費 30%",
+                f"自籌 {money(self_amt)} 元，占 {ratio:.1%}，至少還差 {money(need)} 元。",
+                rule=RULE_SELF_FUND,
+                where="自籌款",
+                comparison=f"自籌 {money(self_amt)} 元，占 {ratio:.1%}，規定至少 {SELF_FUND_RATIO:.0%}",
+                suggestion=f"請再增加自籌至少 {money(need)} 元，或調降補助金額。",
+            ))
         else:
             f.append(Finding(OK, "自籌款占總經費 30% 以上", f"自籌 {money(self_amt)} 元，占 {ratio:.1%}。"))
     else:
         f.append(Finding(OK, "補助未超過 2 萬元，不適用 30% 自籌規定", ""))
 
     # 6. 餐費＋紀念品 ≤ 50%
-    meal = sum(i["subsidy"] for i in ctx.items if i["kind"] in MEAL_KINDS)
+    meal_items = [i for i in ctx.items if i["kind"] in MEAL_KINDS]
+    meal = sum(i["subsidy"] for i in meal_items)
     if sub > 0:
         cap = sub * MEAL_SOUVENIR_RATIO
+        meal_where = _budget_where([i["name"] for i in meal_items]) if meal_items else "經費概算表"
         if meal > cap + 0.5:
-            f.append(Finding(ERROR, "餐費及紀念品超過補助金額 50%", f"補助款支應 {money(meal)} 元，上限 {money(cap)} 元。"))
+            f.append(_issue(
+                ERROR, "餐費及紀念品超過補助金額 50%",
+                f"補助款支應 {money(meal)} 元，上限 {money(cap)} 元。",
+                rule=RULE_MEAL,
+                where=meal_where,
+                comparison=f"補助款支應 {money(meal)} 元，上限 {money(cap)} 元（補助金額的 50%），已超過 {money(meal - cap)} 元",
+                suggestion="請調降餐費或紀念品，或改由自籌款支應，使補助款支應不高於上限。",
+            ))
         elif cap and meal > cap * 0.9:
-            f.append(Finding(WARN, "餐費及紀念品已接近 50% 上限", f"補助款支應 {money(meal)} 元／上限 {money(cap)} 元，核銷時單據稍有變動就可能超過，建議預留空間。"))
+            f.append(_issue(
+                WARN, "餐費及紀念品已接近 50% 上限",
+                f"補助款支應 {money(meal)} 元／上限 {money(cap)} 元，核銷時單據稍有變動就可能超過，建議預留空間。",
+                rule=RULE_MEAL,
+                where=meal_where,
+                comparison=f"補助款支應 {money(meal)} 元，上限 {money(cap)} 元（已超過上限的 90%）",
+                suggestion="建議再調降一些餐費或紀念品，預留核銷時單據變動的空間。",
+            ))
         else:
             f.append(Finding(OK, "餐費及紀念品未超過補助金額 50%", f"補助款支應 {money(meal)} 元／上限 {money(cap)} 元。"))
 
     # 7. 雜支 5%
-    misc = sum(i["total"] for i in ctx.items if i["kind"] == "雜支")
+    misc_items = [i for i in ctx.items if i["kind"] == "雜支"]
+    misc = sum(i["total"] for i in misc_items)
     if misc > 0:
-        if misc > total * MISC_RATIO + 0.5:
-            f.append(Finding(ERROR, "雜支超過總經費 5%", f"雜支 {money(misc)} 元，上限 {money(total * MISC_RATIO)} 元。"))
+        misc_cap = total * MISC_RATIO
+        if misc > misc_cap + 0.5:
+            f.append(_issue(
+                ERROR, "雜支超過總經費 5%",
+                f"雜支 {money(misc)} 元，上限 {money(misc_cap)} 元。",
+                rule=RULE_RATIO,
+                where=_budget_where([i["name"] for i in misc_items]),
+                comparison=f"雜支 {money(misc)} 元，上限 {money(misc_cap)} 元（總經費的 5%），已超過 {money(misc - misc_cap)} 元",
+                suggestion="請把雜支降到上限以內，或改列其他適當科目。",
+            ))
         else:
             f.append(Finding(OK, "雜支未超過總經費 5%", ""))
 
     # 8. 特殊類別（二代健保不參與分配，補助款應為 0）
     nhi_items = [i for i in ctx.items if i["kind"] == NHI_KIND]
     if any(i["subsidy"] > 0.5 for i in nhi_items):
-        f.append(Finding(ERROR, "二代健保補充保費不得使用補助款支應", "請改由自籌款或分隊經費吸收。"))
+        paid = [i for i in nhi_items if i["subsidy"] > 0.5]
+        f.append(_issue(
+            ERROR, "二代健保補充保費不得使用補助款支應",
+            "請改由自籌款或分隊經費吸收。",
+            rule=RULE_NHI,
+            where=_budget_where([i["name"] for i in paid]),
+            comparison="；".join(
+                f"「{item['name'] or '（未命名）'}」補助款支應 {money(item['subsidy'])} 元，規定為 0 元"
+                for item in paid
+            ),
+            suggestion="請改由自籌款或分隊經費吸收，這類項目不分配補助款。",
+        ))
     elif nhi_items:
         f.append(Finding(OK, "二代健保補充保費全數由自籌款支應", "這類項目不分配補助款。"))
-    if any(i["kind"] == "設備購置" for i in ctx.items):
-        f.append(Finding(ERROR, "活動類補助款不得用於資本門（購置設備）",
-                         "設備購置請改走設備類案件（須附廠商估價單與縣府審核表）。"))
-    if any(i["kind"] == "內聘鐘點費" for i in ctx.items):
-        f.append(Finding(WARN, "有內聘教官／助教鐘點費",
-                         "僅限具法源依據且須核發專業證照的實質訓練課程；須由實際授課教官親自簽領，且領取者該案不得重複申請行政敘獎。"))
+    equip = [i for i in ctx.items if i["kind"] == "設備購置"]
+    if equip:
+        f.append(_issue(
+            ERROR, "活動類補助款不得用於資本門（購置設備）",
+            "設備購置請改走設備類案件（須附廠商估價單與縣府審核表）。",
+            rule=RULE_EQUIPMENT,
+            where=_budget_where([i["name"] for i in equip]),
+            comparison="活動類概算表含設備購置，規定不得以活動類補助款支應資本門",
+            suggestion="請從本概算表移除設備購置，改走設備類案件並附廠商估價單與縣府審核表。",
+        ))
+    internal = [i for i in ctx.items if i["kind"] == "內聘鐘點費"]
+    if internal:
+        f.append(_issue(
+            WARN, "有內聘教官／助教鐘點費",
+            "僅限具法源依據且須核發專業證照的實質訓練課程；須由實際授課教官親自簽領，且領取者該案不得重複申請行政敘獎。",
+            rule=RULE_INTERNAL,
+            where=_budget_where([i["name"] for i in internal]),
+            comparison="已編列內聘教官／助教鐘點費",
+            suggestion="僅限具法源依據且須核發專業證照的訓練；其餘課程請刪除該項。",
+        ))
     if total > PROCUREMENT_THRESHOLD:
-        f.append(Finding(WARN, "總經費超過 15 萬元",
-                         "陳報單須敘明採購法依據並加會政風室，不可拆分發包。本產生器目前不處理這類案件，請另洽承辦人。"))
+        f.append(_issue(
+            WARN, "總經費超過 15 萬元",
+            "陳報單須敘明採購法依據並加會政風室，不可拆分發包。本產生器目前不處理這類案件，請另洽承辦人。",
+            rule=RULE_PROCUREMENT,
+            where="總經費",
+            comparison=f"總經費 {money(total)} 元，門檻 {money(PROCUREMENT_THRESHOLD)} 元",
+            suggestion="陳報單須敘明採購法依據並加會政風室，不可拆分發包。本產生器不處理這類案件，請另洽承辦人。",
+        ))
 
     # 9. 品項名稱：避免「贈品」
     gifts = [i["name"] or "（未命名）" for i in ctx.items if "贈品" in (i["name"] or "")]
     if gifts:
-        f.append(Finding(WARN, "品項名稱使用「贈品」",
-                         "建議依性質改列「宣導品」；若是有獎徵答再改列「獎品」。項目：" + "、".join(gifts) + "。"))
+        f.append(_issue(
+            WARN, "品項名稱使用「贈品」",
+            "建議依性質改列「宣導品」；若是有獎徵答再改列「獎品」。項目：" + "、".join(gifts) + "。",
+            rule=RULE_GIFT,
+            where=_budget_where(gifts),
+            comparison="品項名稱含「贈品」：" + "、".join(gifts),
+            suggestion="請依性質改列「宣導品」；若是有獎徵答再改列「獎品」。",
+        ))
 
     # 10. 備註欄
     no_use = [i["name"] or "（未命名）" for i in ctx.items if not i["use"]]
     if no_use:
-        f.append(Finding(ERROR, "概算表有項目沒填「用途說明」", "、".join(no_use) + "。每個品項的備註都要寫明用途與經費來源（經費來源系統會自動補上）。"))
+        f.append(_issue(
+            ERROR, "概算表有項目沒填「用途說明」",
+            "、".join(no_use) + "。每個品項的備註都要寫明用途與經費來源（經費來源系統會自動補上）。",
+            rule=RULE_REMARK,
+            where=_budget_where(no_use) + "用途說明",
+            comparison="尚未填寫用途說明：" + "、".join(no_use),
+            suggestion="請為每個品項寫明用途；經費來源系統會自動補上。",
+        ))
     else:
         f.append(Finding(OK, "每個品項都有用途說明，經費來源已自動寫入備註", ""))
 
     # 11. 課程表（有填時間或日期但內容空白的列仍保留，列數與畫面一致）
     courses = list(ctx.courses)
     if not courses:
-        f.append(Finding(ERROR, "沒有課程表", "辦理研習、訓練活動時，計畫書內應列出詳細課程表。"))
+        f.append(_issue(
+            ERROR, "沒有課程表", "辦理研習、訓練活動時，計畫書內應列出詳細課程表。",
+            rule=RULE_COURSE,
+            where="課程表",
+            comparison="沒有任何課程列",
+            suggestion="請列出課程日期、時間與內容。",
+        ))
     else:
         f.append(Finding(OK, "已列出課程表", f"共 {len(courses)} 列。"))
         empty = [str(i) for i, course in enumerate(courses, 1) if not str(course.get("content") or "").strip()]
         if empty:
-            f.append(Finding(WARN, "課程表有列未填課程內容",
-                             "第 " + "、".join(empty) + " 列仍會列入 Word 與 Excel，請補上課程內容，或刪除用不到的列。"))
+            f.append(_issue(
+                WARN, "課程表有列未填課程內容",
+                "第 " + "、".join(empty) + " 列仍會列入 Word 與 Excel，請補上課程內容，或刪除用不到的列。",
+                rule=RULE_COURSE,
+                where="課程表第 " + "、".join(empty) + " 列",
+                comparison="這些列有日期或時間，但課程內容是空白",
+                suggestion="請補上課程內容，或刪除用不到的列。",
+            ))
         if ctx.start and ctx.end and ctx.end >= ctx.start:
             outside = []
+            outside_iso = []
             for i, course in enumerate(courses, 1):
                 course_date = course.get("date")
                 if course_date and (course_date < ctx.start or course_date > ctx.end):
                     outside.append(f"第{i}列（{roc_date(course_date)}）")
+                    outside_iso.append(f"第{i}列 {course_date.isoformat()}")
             if outside:
-                f.append(Finding(ERROR, "課程日期不在活動期間",
-                                 "、".join(outside) + f"。須介於 {roc_date(ctx.start)} 至 {roc_date(ctx.end)}。"))
+                f.append(_issue(
+                    ERROR, "課程日期不在活動期間",
+                    "、".join(outside) + f"。須介於 {roc_date(ctx.start)} 至 {roc_date(ctx.end)}。",
+                    rule=RULE_COURSE,
+                    where="課程表",
+                    comparison="、".join(outside_iso) + f" 不在 {ctx.start.isoformat()} 至 {ctx.end.isoformat()}",
+                    suggestion="請把課程日期改到活動開始日至結束日之間。",
+                ))
 
     # 11. 人數與餐點份數（提醒）
     if ctx.headcount > 0:
         for i in ctx.items:
             if i["kind"] == "餐費" and i["unit"] in ("份", "個", "人") and i["qty"] > ctx.headcount * ctx.days * 3:
-                f.append(Finding(WARN, f"「{i['name']}」數量偏多",
-                                 f"{int(i['qty'])} {i['unit']}，參訓 {ctx.headcount} 人、{ctx.days} 天，請確認是否合理。"))
+                limit = ctx.headcount * ctx.days * 3
+                f.append(_issue(
+                    WARN, f"「{i['name']}」數量偏多",
+                    f"{int(i['qty'])} {i['unit']}，參訓 {ctx.headcount} 人、{ctx.days} 天，請確認是否合理。",
+                    rule=RULE_MEAL_QTY,
+                    where=_budget_where([i["name"]]),
+                    comparison=f"數量 {int(i['qty'])} {i['unit']}，參訓 {ctx.headcount} 人、{ctx.days} 天（超過 {limit}）",
+                    suggestion="請確認份數是否合理，必要時調降數量，並在用途說明寫明數量來源。",
+                ))
     return f
 
 

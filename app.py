@@ -20,6 +20,42 @@ if not hasattr(sc, "PACKS"):
 if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get_subsidy_banner", "steps_from_editor_records", "ensure_content_packs")):
     db = importlib.reload(db)
 
+# 與上面同一個原因：重新部署後 sys.modules 裡的 plan_generator 可能還是舊版，
+# normalize_items 沒有 subsidy 參數，計畫書產生器一載入就 TypeError。
+_PLAN_GENERATOR_REVISION = 3
+
+
+def load_plan_generator():
+    """載入 plan_generator；若記憶體中是舊版就從磁碟重載。"""
+    import inspect
+    import plan_generator as pg
+    import subsidy_check as chk
+
+    finding_fields = getattr(chk.Finding, "__dataclass_fields__", {})
+    if "suggestion" not in finding_fields or "where" not in finding_fields:
+        chk = importlib.reload(chk)
+        pg = importlib.reload(pg)
+
+    def _is_current(mod):
+        fn = getattr(mod, "normalize_items", None)
+        try:
+            params = tuple(inspect.signature(fn).parameters) if fn is not None else ()
+        except (TypeError, ValueError):
+            params = ()
+        return (
+            getattr(mod, "MODULE_REVISION", 0) == _PLAN_GENERATOR_REVISION
+            and "subsidy" in params
+            and hasattr(mod, "format_compliance_item")
+            and hasattr(mod, "ALL_CLEAR_MESSAGE")
+        )
+
+    if not _is_current(pg):
+        pg = importlib.reload(pg)
+    return pg
+
+
+load_plan_generator()
+
 # 頁面配置
 # 補捐助專區（?view=subsidy）使用自己的分頁標題與圖示，這樣在瀏覽器歷史、書籤、分頁列
 # 才分得出和主網站（業務知識動態看板）是不同的網頁。
@@ -1361,7 +1397,7 @@ def render_settlement_check_page():
 
 def _apply_plan_preset(ver, preset):
     """把計畫書表單設成初始、空白或範例。欄位寫進下一個版本的 widget key，避免清空後殘留。"""
-    import plan_generator as pg
+    pg = load_plan_generator()
     from datetime import date, timedelta
 
     today = date.today()
@@ -1429,7 +1465,7 @@ def render_plan_generator_page():
 
     先套用申請階段的規則檢查。輸入只留在目前瀏覽器分頁的記憶體中，不寫入資料庫、不上傳。
     """
-    import plan_generator as pg
+    pg = load_plan_generator()
 
     st.markdown("""
     <div style="background: linear-gradient(to right, #eff6ff, #eef2ff); border: 1px solid #bfdbfe; border-radius: 10px; padding: 1.2rem 1.5rem; margin-bottom: 1.2rem;">
@@ -1570,22 +1606,29 @@ def render_plan_generator_page():
                       f"{ctx.self_fund / ctx.total:.1%}" if ctx.total else None, delta_color="off")
 
     findings = pg.check_plan(ctx)
-    n_err = sum(1 for f in findings if f.level == pg.ERROR)
-    n_warn = sum(1 for f in findings if f.level == pg.WARN)
-    if n_err:
-        st.error(f"❌ 有 {n_err} 項不符規定，建議修正後再送審（仍可先下載草稿修改）。")
-    elif n_warn:
-        st.warning(f"⚠️ 規定檢查通過，另有 {n_warn} 項提醒。")
+    kind, banner = pg.compliance_banner(findings)
+    errors = [f for f in findings if f.level == pg.ERROR]
+    warns = [f for f in findings if f.level == pg.WARN]
+    oks = [f for f in findings if f.level == pg.OK]
+    if kind == "pass":
+        st.success(banner, icon="✅")
+    elif kind == "error":
+        st.error(f"❌ {banner}")
+        for f in errors:
+            st.error(pg.format_compliance_item(f))
+        if warns:
+            st.markdown("**提醒（不阻擋匯出）**")
+            for f in warns:
+                st.warning(pg.format_compliance_item(f))
     else:
-        st.success("✅ 規定檢查全部通過。")
-    for f in findings:
-        line = f"**{f.title}**" + (f"：{f.detail}" if f.detail else "")
-        if f.level == pg.ERROR:
-            st.error(line, icon="❌")
-        elif f.level == pg.WARN:
-            st.warning(line, icon="⚠️")
-        else:
-            st.success(line, icon="✅")
+        st.warning(f"⚠️ {banner}")
+        for f in warns:
+            st.warning(pg.format_compliance_item(f))
+    if oks:
+        with st.expander(f"已通過的檢查（{len(oks)} 項）", expanded=(kind == "pass")):
+            for f in oks:
+                line = f"**{f.title}**" + (f"：{f.detail}" if f.detail else "")
+                st.markdown(line)
 
     ready = bool(unit.strip() and name.strip() and items)
     if not ready:

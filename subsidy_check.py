@@ -28,6 +28,10 @@ class Finding:
     level: str      # ok / warn / error
     title: str
     detail: str
+    rule: str = ""          # 對照的注意要點或錯誤樣態（以標題標示；畫面上的編號會因增刪而變）
+    where: str = ""         # 出錯的欄位或區段
+    comparison: str = ""    # 實際值與規定上限
+    suggestion: str = ""    # 一行修正建議
 
 
 def _num(v):
