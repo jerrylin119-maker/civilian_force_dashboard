@@ -154,13 +154,23 @@ class NoSubsidyWordsTests(unittest.TestCase):
 
 
 class HistoricalCaseTests(unittest.TestCase):
-    def test_three_activity_cases_listed(self):
-        listed = pg.case_list("activity")
-        self.assertEqual([k for k, _l, _s in listed], CASE_KEYS)
-        self.assertEqual(pg.case_list("training"), [])
+    def test_cases_listed_by_plan_type(self):
+        activity = [k for k, _l, _s in pg.case_list("activity")]
+        training = [k for k, _l, _s in pg.case_list("training")]
+        self.assertEqual(activity, ["honor", "study_tour", "culture_edu"])
+        self.assertEqual(training, [
+            "vehicle_fire", "rehab_bls", "mountain_rescue", "car_rescue",
+            "rope_two_days", "water_rescue", "mountain_three_days",
+        ])
+        self.assertEqual(activity + training, CASE_KEYS)
 
     def test_original_totals_are_preserved(self):
-        expected = {"honor": (346000, 240000), "study_tour": (144000, 100000), "culture_edu": (78200, 40000)}
+        expected = {
+            "honor": (346000, 240000), "study_tour": (144000, 100000), "culture_edu": (78200, 40000),
+            "vehicle_fire": (24500, 20000), "rehab_bls": (78600, 50000), "mountain_rescue": (20160, 20000),
+            "car_rescue": (21300, 20000), "rope_two_days": (23900, 20000), "water_rescue": (30500, 20000),
+            "mountain_three_days": (86750, 60000),
+        }
         for key, (total, subsidy) in expected.items():
             ctx = pg.case_context(key, TODAY)
             self.assertEqual(ctx.total, total, key)
@@ -174,7 +184,16 @@ class HistoricalCaseTests(unittest.TestCase):
             self.assertEqual(errors, [], key)
             self.assertGreater(len(pg.build_docx(ctx)), 1000)
             self.assertGreater(len(pg.build_xlsx(ctx)), 1000)
-            self.assertEqual(ctx.plan_type, "activity")
+            self.assertEqual(ctx.plan_type, pg.case_inputs(key, TODAY)["plan_type"])
+
+    def test_training_cases_have_schedule_and_no_award(self):
+        for key in ("vehicle_fire", "rehab_bls", "mountain_rescue", "car_rescue",
+                    "rope_two_days", "water_rescue", "mountain_three_days"):
+            ctx = pg.case_context(key, TODAY)
+            self.assertEqual(ctx.plan_type, "training", key)
+            self.assertGreaterEqual(len(ctx.courses), 4, key)
+            self.assertNotIn("沒有課程表", _titles(pg.check_plan(ctx, today=TODAY)), key)
+
 
     def test_honor_case_over_150k_gets_procurement_warning_only(self):
         ctx = pg.case_context("honor", TODAY)
@@ -219,6 +238,10 @@ class HistoricalCaseTests(unittest.TestCase):
         a = pg.case_inputs("honor", TODAY)
         a["items"].append({"name": "x"})
         self.assertEqual(len(pg.case_inputs("honor", TODAY)["items"]), 8)
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 
 if __name__ == "__main__":
