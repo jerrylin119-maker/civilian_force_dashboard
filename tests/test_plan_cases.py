@@ -42,7 +42,7 @@ class ActivityTypeTests(unittest.TestCase):
         self.assertIn("activity", pg.PLAN_TYPES)
         self.assertEqual(pg.PLAN_TYPES["training"]["audience_label"], "參訓對象")
         self.assertEqual(pg.PLAN_TYPES["activity"]["audience_label"], "參加對象")
-        self.assertEqual(pg.MODULE_REVISION, 7)
+        self.assertEqual(pg.MODULE_REVISION, 8)
 
     def test_activity_sections_use_activity_wording_and_skip_award(self):
         ctx = _activity(purpose="表彰績優人員", method="（一）績優表揚。\n（二）頒獎。")

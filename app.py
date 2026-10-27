@@ -22,7 +22,7 @@ if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get
 
 # 與上面同一個原因：重新部署後 sys.modules 裡的 plan_generator 可能還是舊版，
 # normalize_items 沒有 subsidy 參數，計畫書產生器一載入就 TypeError。
-_PLAN_GENERATOR_REVISION = 7
+_PLAN_GENERATOR_REVISION = 8
 
 
 def load_plan_generator():
@@ -1617,19 +1617,66 @@ def render_plan_generator_page():
          for r in sources_df.to_dict("records")])
     subsidy = sum(sc["amount"] for sc in src_list)
     councilors = "、".join(sc["names"] for sc in src_list if sc["kind"] == "councilor" and sc["names"])
-    st.metric("補助總額", f"{subsidy:,.0f} 元")
-    st.caption("每個品項只填數量、單價、用途說明與類別。"
-               "系統依各項金額比例分配（整數元，最後一個可分配項目吸收餘數），各補助來源分別分配，其餘為自籌款。"
+    st.metric("補助款合計（各補助來源加總）", f"{subsidy:,.0f} 元")
+    st.markdown("**經費概算表（全部項目）**")
+    st.caption("這張表是完整的概算表：所有品項（含自籌款支應的）都填在這裡。補助款只是依各項金額比例分配到各項，"
+               "其餘為自籌款，分配結果在下方「補助款分配結果」。"
                "二代健保補充保費，以及品項名稱含「油資」「過路費」「停車費」的項目，縣府不予補助，不分配補助款、全數自籌。"
                "備註（用途＋經費來源）由系統自動產生。")
+    item_rev = st.session_state.get("plan_item_rev", 0)
+    base_items = st.session_state["plan_items"].copy()
+    if "刪除" not in base_items.columns:
+        base_items.insert(0, "刪除", False)
     items_df = st.data_editor(
-        st.session_state["plan_items"], num_rows="dynamic", use_container_width=True, key=f"plan_item_editor_{ver}",
+        base_items, num_rows="dynamic", use_container_width=True, key=f"plan_item_editor_{ver}_{item_rev}",
         column_config={
+            "刪除": st.column_config.CheckboxColumn("刪除", help="勾選後按下方「刪除勾選列」；勾選的列不計入下面的合計"),
             "類別": st.column_config.SelectboxColumn("類別", options=pg.ITEM_KINDS, required=True),
             "數量": st.column_config.NumberColumn("數量", step=1, format="%d"),
             "單價": st.column_config.NumberColumn("單價", step=10, format="%d"),
         },
     )
+    marked = items_df["刪除"].fillna(False).astype(bool)
+    items_df_eff = items_df[~marked]
+    qty_s = pd.to_numeric(items_df_eff["數量"], errors="coerce").fillna(0)
+    price_s = pd.to_numeric(items_df_eff["單價"], errors="coerce").fillna(0)
+    grand_total = float((qty_s * price_s).sum())
+    n_items = int(((qty_s * price_s) > 0).sum())
+    sum_line = f"**概算總計：{grand_total:,.0f} 元**（{n_items} 項）｜補助款 {subsidy:,.0f} 元｜自籌款 {max(grand_total - subsidy, 0):,.0f} 元"
+    if subsidy > grand_total + 0.5:
+        st.error(sum_line + "　⚠️ 補助款大於概算總計，請調整")
+    else:
+        st.markdown(sum_line)
+
+    ex_all = pg.item_examples(plan_type)
+    ex_pick = st.multiselect(
+        "加入整列範例（取自歷史案例，加入後可再修改品名、數量、單價）", list(range(len(ex_all))),
+        format_func=lambda i: f"{ex_all[i]['name']}（{ex_all[i]['kind']}，{ex_all[i]['unit']}，單價 {ex_all[i]['price']:,}）",
+        key=f"plan_ex_pick_{ver}_{item_rev}")
+    ba, bb, _bc = st.columns([1.3, 1.3, 4])
+
+    def _blank_free(df):
+        name_ok = df["項目"].fillna("").astype(str).str.strip() != ""
+        qty_ok = pd.to_numeric(df["數量"], errors="coerce").fillna(0) != 0
+        return df[name_ok | qty_ok]
+
+    if bb.button("🗑️ 刪除勾選列", use_container_width=True, disabled=not bool(marked.any()), key=f"plan_item_del_{ver}"):
+        kept = _blank_free(items_df_eff).drop(columns=["刪除"])
+        if kept.empty:
+            kept = pd.DataFrame([{"項目": "", "類別": "設備購置" if is_equip else "一般", "數量": 0, "單位": "",
+                                  "單價": 0, "用途說明": ""}])
+        st.session_state["plan_items"] = kept.reset_index(drop=True)
+        st.session_state["plan_item_rev"] = item_rev + 1
+        st.rerun()
+    if ba.button("➕ 加入範例列", use_container_width=True, disabled=not ex_pick, key=f"plan_item_add_{ver}"):
+        added = pd.DataFrame([
+            {"項目": ex_all[i]["name"], "類別": ex_all[i]["kind"], "數量": ex_all[i]["qty"], "單位": ex_all[i]["unit"],
+             "單價": ex_all[i]["price"], "用途說明": ex_all[i]["use"]} for i in ex_pick])
+        merged = pd.concat([_blank_free(items_df_eff).drop(columns=["刪除"]), added], ignore_index=True)
+        st.session_state["plan_items"] = merged
+        st.session_state["plan_item_rev"] = item_rev + 1
+        st.rerun()
+    st.caption("不需要的列：勾選最左邊的「刪除」後按「刪除勾選列」（也可選取整列按 Delete）。")
 
     is_activity = plan_type == "activity"
     expander_title = ("進階：自訂緣由（需求原因）與目的（都可留空，系統會用範本）" if is_equip
@@ -1680,7 +1727,7 @@ def render_plan_generator_page():
         return out
 
     items = pg.normalize_items(
-        _rows(items_df, {"name": "項目", "kind": "類別", "qty": "數量", "unit": "單位", "price": "單價",
+        _rows(items_df_eff, {"name": "項目", "kind": "類別", "qty": "數量", "unit": "單位", "price": "單價",
                         "use": "用途說明"}),
         subsidy=float(subsidy), source_label=pg.PLAN_TYPES[plan_type]["source_label"], sources=src_list)
     courses = _rows(courses_df, {"date": "日期", "time": "時間", "content": "課程內容", "teacher": "教官／講師"})

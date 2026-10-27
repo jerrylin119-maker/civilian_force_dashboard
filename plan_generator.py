@@ -26,7 +26,7 @@ from subsidy_check import (
 
 # app.py 用這個數字判斷記憶體裡的模組是不是舊版。Streamlit Cloud 重新部署時
 # 常常只重跑 app.py，sys.modules 仍留著上一版 plan_generator。
-MODULE_REVISION = 7
+MODULE_REVISION = 8
 
 PLAN_TYPES = {
     "training": {
@@ -1659,6 +1659,22 @@ def context_from_inputs(data, plan_type="training"):
         purpose=data.get("purpose", ""),
         rules=data.get("rules", ""),
     )
+
+
+def item_examples(plan_type):
+    """歷史案例裡出現過的概算項目（依品名去重），供畫面一鍵加入整列範例。設備類只給設備購置項目。"""
+    plan_cases = _load_plan_cases()
+    today = date.today()
+    seen, out = set(), []
+    for key in plan_cases.CASE_KEYS:
+        data = plan_cases.build_case(key, today)
+        for it in data["items"]:
+            is_equip = it["kind"] == "設備購置"
+            if (plan_type == "equipment") != is_equip or it["name"] in seen:
+                continue
+            seen.add(it["name"])
+            out.append(dict(it))
+    return out
 
 
 def example_context(today=None):
