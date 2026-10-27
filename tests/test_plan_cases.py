@@ -157,7 +157,7 @@ class HistoricalCaseTests(unittest.TestCase):
     def test_cases_listed_by_plan_type(self):
         activity = [k for k, _l, _s in pg.case_list("activity")]
         training = [k for k, _l, _s in pg.case_list("training")]
-        self.assertEqual(activity, ["honor", "study_tour", "culture_edu"])
+        self.assertEqual(activity, ["honor", "study_tour", "culture_edu", "award_dinner", "env_study"])
         self.assertEqual(training, [
             "vehicle_fire", "rehab_bls", "mountain_rescue", "car_rescue",
             "rope_two_days", "water_rescue", "mountain_three_days",
@@ -170,6 +170,7 @@ class HistoricalCaseTests(unittest.TestCase):
             "vehicle_fire": (24500, 20000), "rehab_bls": (78600, 50000), "mountain_rescue": (20160, 20000),
             "car_rescue": (21300, 20000), "rope_two_days": (23900, 20000), "water_rescue": (30500, 20000),
             "mountain_three_days": (86750, 60000),
+            "award_dinner": (48000, 20000), "env_study": (20000, 20000),
         }
         for key, (total, subsidy) in expected.items():
             ctx = pg.case_context(key, TODAY)

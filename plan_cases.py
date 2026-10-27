@@ -11,7 +11,7 @@
 from datetime import timedelta
 
 CASE_KEYS = (
-    "honor", "study_tour", "culture_edu",
+    "honor", "study_tour", "culture_edu", "award_dinner", "env_study",
     "vehicle_fire", "rehab_bls", "mountain_rescue", "car_rescue",
     "rope_two_days", "water_rescue", "mountain_three_days",
 )
@@ -405,10 +405,88 @@ def _mountain_three_days(start):
     )
 
 
+def _award_dinner(start):
+    return {
+        "key": "award_dinner",
+        "plan_type": "activity",
+        "label": "分隊績優人員表揚活動（單日，總經費 4.8 萬、補助 2 萬）",
+        "summary": "原案 114 年大豐義消分隊辦理，單日晚間；總經費 48,000 元、議員補助 20,000 元、自籌 28,000 元。"
+                   "原案名稱含「聯歡」，現行大隊初審檢核表列為純娛樂性質字眼，範例已改為「績優人員表揚」。"
+                   "原案核銷時便餐實際只用補助款 10,000 元（剛好 50%），獎座全數自籌。",
+        "unit": "大豐義消分隊",
+        "name": "績優人員表揚",
+        "start": start,
+        "end": start,
+        "place": "本分隊",
+        "audience": "本分隊所屬義消人員",
+        "headcount": 40,
+        "co_organizer": "大豐消防分隊",
+        "councilors": "王議員",
+        "instructors": "",
+        "supervisor": "",
+        "subsidy": 20000,
+        "purpose": "為提升本分隊所屬義消之團結向心力與服務熱忱，藉由公開表揚平日投入救災、勤務支援及公共服務表現優異人員，"
+                   "表達感謝其無私奉獻與辛勞付出，進一步激勵士氣，並強化消防與義消間之橫向聯繫及合作默契",
+        "method": "活動當日於本分隊辦理，頒發績優人員獎座並表揚義消競技大賽優勝隊伍。",
+        "rules": "",
+        "items": _items([
+            ("便餐", "餐費", 6, "桌", 4000, "供表揚活動用餐"),
+            ("獎座", "一般", 14, "座", 1000, "供績優人員使用"),
+            ("紅布條", "一般", 1, "條", 2000, "供活動場地佈置及成果拍攝使用"),
+            ("彩色墨水", "一般", 5, "組", 1000, "供活動文書及海報列印使用"),
+            ("黑色墨水", "一般", 5, "組", 600, "供活動文書及海報列印使用"),
+        ]),
+        "courses": [],
+    }
+
+
+def _env_study(start):
+    return {
+        "key": "env_study",
+        "plan_type": "activity",
+        "label": "防災宣導義消環境教育研習（單日，總經費 2 萬、補助 2 萬）",
+        "summary": "原案 115 年大豐防災宣導義消分隊辦理，單日、約 20 人；總經費 20,000 元、議員補助 20,000 元、全額補助無自籌。"
+                   "支出只有導覽費與車資兩項，沒有餐費；原案收支清單不含用餐，午餐為個人自理。"
+                   "範例已刪去原案的場館名稱，載入後請填實際地點。車資須是租車費用，不可含油資、過路費、停車費。",
+        "unit": "大豐防災宣導義消分隊",
+        "name": "環境教育研習",
+        "start": start,
+        "end": start,
+        "place": "原住民部落生態導覽場域",
+        "audience": "本分隊所屬及防災宣導義消人員",
+        "headcount": 20,
+        "co_organizer": "",
+        "councilors": "王議員",
+        "instructors": "",
+        "supervisor": "",
+        "subsidy": 20000,
+        "purpose": "透過跨領域研習，將環境教育與防災思維鏈結，強化同仁面對氣候變遷之減災應變能力，"
+                   "並凝聚宣導義消成員之團隊默契與向心力，將研習效益轉化為實質宣導能量，提升本縣社區居家訪視與防救災服務品質",
+        "method": "實際走訪布農族部落，體驗山林智慧（獵人文化、生態永續、涵養水源、水土保持、無痕山林），"
+                  "學習傳統部落如何觀察天象、動植物異狀預警土石流或颱風，探討氣候變遷衝擊。",
+        "rules": "",
+        "items": _items([
+            ("活動導覽費", "一般", 20, "人", 700, "部落生態導覽及講解"),
+            ("車資（租車）", "一般", 2, "趟", 3000, "往返研習地點之交通租車費用"),
+        ]),
+        "courses": [
+            _course(start, "09:30－10:00", "部落歌謠迎賓", "導覽人員"),
+            _course(start, "10:10－12:00", "部落生態導覽", "導覽人員"),
+            _course(start, "12:00－13:00", "午餐及休息"),
+            _course(start, "13:00－14:00", "無痕山林生態探索", "導覽人員"),
+            _course(start, "14:00－15:00", "森林與防救災之關係", "導覽人員"),
+            _course(start, "15:00－16:00", "環境概念知識（涵養水源、水土保持）", "導覽人員"),
+            _course(start, "16:00－17:00", "綜合討論及賦歸"),
+        ],
+    }
+
+
 _BUILDERS = {
     "honor": _honor,
     "study_tour": _study_tour,
     "culture_edu": _culture_edu,
+    "award_dinner": _award_dinner,
+    "env_study": _env_study,
     "vehicle_fire": _vehicle_fire,
     "rehab_bls": _rehab_bls,
     "mountain_rescue": _mountain_rescue,
