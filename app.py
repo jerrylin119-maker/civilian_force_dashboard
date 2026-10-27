@@ -1835,6 +1835,39 @@ def render_plan_generator_page():
     st.caption("草稿依固定範本產生，送審前請承辦人逐項確認內容、數字與核章；檢查結果僅供提醒，最終以縣府及局內審查為準。")
 
 
+def _load_generator_manual():
+    """讀 docs/計畫書產生器操作說明.md，依「## 」切成 (簡介, [(章節標題, 內容)])。讀不到就回傳 None。"""
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "計畫書產生器操作說明.md")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    parts = re.split(r"(?m)^## ", text)
+    intro = re.sub(r"(?m)^# .*\n", "", parts[0]).replace("---", "").strip()
+    sections = []
+    for block in parts[1:]:
+        title, _, body = block.partition("\n")
+        sections.append((title.strip(), re.sub(r"(?m)^---\s*$", "", body).strip()))
+    return intro, sections
+
+
+def render_generator_manual():
+    """操作說明：計畫書產生器怎麼用，附完整範例（內容在 docs 資料夾，可直接改檔）。"""
+    manual = _load_generator_manual()
+    if not manual:
+        return
+    intro, sections = manual
+    st.markdown("#### 📖 計畫書產生器操作說明")
+    st.caption("第一次使用請先看「二、最快的做法」與兩個完整範例；點章節標題展開。")
+    if intro:
+        st.markdown(intro)
+    for title, body in sections:
+        with st.expander(title):
+            st.markdown(body)
+
+
 def render_subsidy_guide():
     """🏠 補捐助專區使用導覽：依「我現在要做什麼」帶同仁走到正確的頁面。"""
     def _go_to_tab(tab_label):
@@ -1900,7 +1933,7 @@ def render_subsidy_guide():
         ("🧭 申請與核銷流程", "🧭 申請與核銷流程", "完整的申請、核銷流程，分隊／大隊／科室各步驟做什麼，附陳報單範例句與常見問答。"),
         ("📌 申請注意要點", "📌 申請注意要點", "活動費、設備費、共通與核銷的規定：用字、自籌款、餐費比例、單據與附件。"),
         ("⚠️ 錯誤樣態案例", "⚠️ 錯誤樣態案例", "過去常見的退件與缺失，含錯誤說明、造成的問題與正確做法。"),
-        ("✏️ 計畫書產生器", "✏️ 計畫書產生器", "選計畫類型、填必要資料，產出計畫書（Word）與概算表（Excel）草稿，並先檢查規定。"),
+        ("✏️ 計畫書產生器", "✏️ 計畫書產生器", "選計畫類型、填必要資料，產出計畫書（Word）、概算表（Excel）與陳報單（Word）草稿，並先檢查規定。"),
         ("✅ 核銷自我檢核", "✅ 核銷自我檢核", "送大隊初審前，自行檢查收支清單金額與核銷文件是否備齊。"),
     ]
     for label, target, desc in pages:
@@ -1909,6 +1942,8 @@ def render_subsidy_guide():
             st.button(label, on_click=_go_to_tab, args=(target,), use_container_width=True, key=f"guide_pg_{target}")
         with cd:
             st.markdown(f"<div style='padding-top:0.35rem; color:#475569;'>{html.escape(desc)}</div>", unsafe_allow_html=True)
+
+    render_generator_manual()
 
     st.markdown("#### 🔢 先記住這幾個數字")
     chips = "".join(
