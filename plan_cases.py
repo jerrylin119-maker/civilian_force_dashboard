@@ -13,7 +13,7 @@ from datetime import timedelta
 CASE_KEYS = (
     "honor", "study_tour", "culture_edu", "award_dinner", "env_study",
     "vehicle_fire", "rehab_bls", "mountain_rescue", "car_rescue",
-    "rope_two_days", "water_rescue", "mountain_three_days",
+    "rope_two_days", "water_rescue", "mountain_three_days", "equip_rescue",
 )
 
 
@@ -481,6 +481,42 @@ def _env_study(start):
     }
 
 
+def _equip_rescue(start):
+    return {
+        "key": "equip_rescue",
+        "plan_type": "equipment",
+        "label": "購置救災設備及後勤照護設備（總經費 9.7 萬、補助 9.7 萬、自籌 0）",
+        "summary": "原案 115 年臺東義消分隊購置救災設備（確保器、岩盔、安全吊帶）與後勤照護設備（行動冰箱、移動式發電機）；"
+                   "總經費 97,423 元，全額由議員建議縣府補助，自籌 0 元。須附廠商估價單與縣政府設備類審核表。",
+        "unit": "○○義消分隊",
+        "name": "救災設備及後勤照護設備",
+        "start": start,
+        "end": start,
+        "place": "○○分隊",
+        "audience": "○○義消分隊",
+        "headcount": 0,
+        "co_organizer": "",
+        "councilors": "王議員",
+        "instructors": "",
+        "supervisor": "",
+        "subsidy": 97423,
+        "background": "近年來山域事故頻傳，為強化義消分隊山域裝備，以利義消協助執行山域事故任務之安全，"
+                      "另為救災器具電力不中斷，維持前進指揮所與救災人員之持續作戰能力，確保通訊設備運作、"
+                      "保障救災物資（如飲水、糧食）不變質，提供救災人員基本後勤照護",
+        "purpose": "充實○○義消分隊救災及後勤照護設備，供義消同仁執行山域事故任務時使用，提升個人安全，"
+                   "維持持續作戰能力，以順利完成任務，特訂定本計畫。",
+        "method": "",
+        "rules": "",
+        "items": _items([
+            ("行動冰箱", "設備購置", 1, "台", 22595, "確保通訊設備運作、保障救災物資（如飲水、糧食）不變質，提供救災人員基本後勤照護"),
+            ("移動式發電機", "設備購置", 1, "台", 47800, "救災器具電力不中斷，且維持前進指揮所與救災人員之持續作戰能力"),
+            ("救災設備組（確保器、岩盔、雙確保環安全吊帶各1）", "設備購置", 2, "組", 13514,
+             "強化義消分隊山域裝備，以利義消協助執行山域事故任務之安全"),
+        ]),
+        "courses": [],
+    }
+
+
 _BUILDERS = {
     "honor": _honor,
     "study_tour": _study_tour,
@@ -494,6 +530,7 @@ _BUILDERS = {
     "rope_two_days": _rope_two_days,
     "water_rescue": _water_rescue,
     "mountain_three_days": _mountain_three_days,
+    "equip_rescue": _equip_rescue,
 }
 
 

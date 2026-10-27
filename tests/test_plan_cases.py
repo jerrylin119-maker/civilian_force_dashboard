@@ -42,7 +42,7 @@ class ActivityTypeTests(unittest.TestCase):
         self.assertIn("activity", pg.PLAN_TYPES)
         self.assertEqual(pg.PLAN_TYPES["training"]["audience_label"], "參訓對象")
         self.assertEqual(pg.PLAN_TYPES["activity"]["audience_label"], "參加對象")
-        self.assertEqual(pg.MODULE_REVISION, 5)
+        self.assertEqual(pg.MODULE_REVISION, 7)
 
     def test_activity_sections_use_activity_wording_and_skip_award(self):
         ctx = _activity(purpose="表彰績優人員", method="（一）績優表揚。\n（二）頒獎。")
@@ -162,7 +162,9 @@ class HistoricalCaseTests(unittest.TestCase):
             "vehicle_fire", "rehab_bls", "mountain_rescue", "car_rescue",
             "rope_two_days", "water_rescue", "mountain_three_days",
         ])
-        self.assertEqual(activity + training, CASE_KEYS)
+        equipment = [k for k, _l, _s in pg.case_list("equipment")]
+        self.assertEqual(equipment, ["equip_rescue"])
+        self.assertEqual(activity + training + equipment, CASE_KEYS)
 
     def test_original_totals_are_preserved(self):
         expected = {
@@ -171,6 +173,7 @@ class HistoricalCaseTests(unittest.TestCase):
             "car_rescue": (21300, 20000), "rope_two_days": (23900, 20000), "water_rescue": (30500, 20000),
             "mountain_three_days": (86750, 60000),
             "award_dinner": (48000, 20000), "env_study": (20000, 20000),
+            "equip_rescue": (97423, 97423),
         }
         for key, (total, subsidy) in expected.items():
             ctx = pg.case_context(key, TODAY)
@@ -240,9 +243,145 @@ class HistoricalCaseTests(unittest.TestCase):
         a["items"].append({"name": "x"})
         self.assertEqual(len(pg.case_inputs("honor", TODAY)["items"]), 8)
 
+    def test_submission_form_same_wording_for_activity_and_training(self):
+        """陳報單句型相同，只有計畫名稱與檢陳文件不同；預訂日期地點寫在第一點；不得出現敘獎額度。"""
+        for key in CASE_KEYS:
+            ctx = pg.case_context(key, TODAY)
+            subject = pg.submission_subject(ctx)
+            body = pg.submission_body(ctx)
+            joined = "".join(body)
+            self.assertIn(pg.plan_full_name(ctx), subject)
+            self.assertIn("申請議員建議補助款案", subject)
+            if ctx.plan_type != "equipment":
+                self.assertIn(ctx.date_text, body[0])
+                self.assertIn(ctx.place.strip(), body[0])
+            self.assertIn("建請鈞長同意辦理申請補助款事宜", body[1])
+            self.assertIn(f"新臺幣{pg.money(ctx.total)}元", body[1])
+            self.assertIn("經費概算表", body[2])
+            self.assertNotIn("嘉獎", joined)
+            self.assertNotIn("人事室", pg.meet_text(ctx))
+            self.assertGreater(len(pg.build_submission_docx(ctx)), 2000)
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_submission_form_without_self_fund_omits_rest_clause(self):
+        ctx = pg.case_context("env_study", TODAY)
+        self.assertLess(ctx.self_fund, 0.5)
+        self.assertNotIn("不足部分", "".join(pg.submission_body(ctx)))
+        self.assertNotIn("不足部分", pg.fund_text(ctx))
+        ctx = pg.case_context("honor", TODAY)
+        self.assertIn("不足部分", "".join(pg.submission_body(ctx)))
+
+    def test_training_submission_lists_safety_checklist_and_default_meet(self):
+        ctx = pg.case_context("rehab_bls", TODAY)
+        self.assertIn("訓練安全計畫與檢核表", pg.submission_body(ctx)[2])
+        self.assertEqual(pg.meet_text(ctx), "災害搶救科、綜合企劃及安全衛生科、民力運用及訓練科、會計室")
+
+
+class MultiSourceAndEquipmentTests(unittest.TestCase):
+    def _mixed(self):
+        data = pg.case_inputs("rehab_bls", TODAY)
+        data["sources"] = [
+            {"kind": "councilor", "names": "林", "amount": 30000},
+            {"kind": "rep", "names": "陳", "township": "卑南鄉公所", "amount": 20000},
+        ]
+        data["awards"] = [{"role": "大隊督辦人員", "count": 2, "kind": "嘉獎", "times": 1},
+                          {"role": "分隊承辦人員", "count": 1, "kind": "嘉獎", "times": 2}]
+        return pg.context_from_inputs(data, "training")
+
+    def test_sources_sum_to_subsidy_and_each_item_remark_names_every_source(self):
+        ctx = self._mixed()
+        self.assertEqual(ctx.subsidy, 50000)
+        self.assertEqual(sum(i["subsidy"] for i in ctx.items), 50000)
+        for item in ctx.items:
+            self.assertAlmostEqual(sum(a for _l, a in item["by_source"]), item["subsidy"], places=6)
+            self.assertIn("議員建議補助款支應", item["remark"])
+            self.assertIn("卑南鄉公所代表建議補助款支應", item["remark"])
+        by_label = {}
+        for item in ctx.items:
+            for label, amount in item["by_source"]:
+                by_label[label] = by_label.get(label, 0) + amount
+        self.assertEqual(by_label, {"議員建議補助款": 30000, "卑南鄉公所代表建議補助款": 20000})
+
+    def test_mixed_source_texts_and_attachments(self):
+        ctx = self._mixed()
+        fund = pg.fund_text(ctx)
+        self.assertIn("林議員建議縣府補助新臺幣參萬元整", fund)
+        self.assertIn("卑南鄉公所陳代表建議卑南鄉公所補助新臺幣貳萬元整", fund)
+        body = pg.submission_body(ctx)
+        self.assertIn("林議員及卑南鄉公所補助本局辦理", body[1])
+        self.assertIn("林議員新臺幣30,000元、卑南鄉公所新臺幣20,000元", body[1])
+        self.assertIn("「臺東縣議員建議補助活動類案件建議表」", body[2])
+        self.assertIn("「卑南鄉代表建議補助活動類案件建議表」", body[2])
+        self.assertIn("議員建議補助款及卑南鄉公所代表建議補助款", pg.submission_subject(ctx))
+
+    def test_single_source_keeps_old_wording(self):
+        ctx = pg.case_context("honor", TODAY)
+        self.assertEqual(len(ctx.sources), 1)
+        self.assertIn("王議員、李議員建議縣府補助新臺幣貳拾肆萬元整", pg.fund_text(ctx))
+        for item in ctx.items:
+            self.assertNotIn("代表", item["remark"])
+
+    def test_rep_only_source_goes_through_battalion(self):
+        data = pg.case_inputs("honor", TODAY)
+        data["sources"] = [{"kind": "rep", "names": "", "township": "", "amount": 240000}]
+        ctx = pg.context_from_inputs(data, "activity")
+        self.assertIn("ＯＯ公所", pg.fund_text(ctx))
+        self.assertIn("由大隊發文", pg.issuing_note(ctx))
+        self.assertIn("縣府", pg.issuing_note(pg.case_context("honor", TODAY)))
+
+    def test_awards_add_clause_and_personnel_office(self):
+        ctx = self._mixed()
+        body = pg.submission_body(ctx)
+        self.assertEqual(body[3], "四、辦理本案出（不）力人員依規定獎（懲）勵，敘獎額度如下：")
+        self.assertEqual(body[4], "（一）大隊督辦人員（2名）嘉獎1次。")
+        self.assertEqual(body[5], "（二）分隊承辦人員（1名）嘉獎2次。")
+        self.assertIn("人事室", pg.meet_text(ctx))
+        self.assertNotIn("嘉獎", pg.markdown_preview(ctx))
+        self.assertEqual(pg.normalize_awards([{"role": "", "count": 1, "times": 1}, {"role": "x", "count": 0, "times": 1}]), [])
+
+    def test_equipment_type_sections_and_rules(self):
+        ctx = pg.case_context("equip_rescue", TODAY)
+        self.assertEqual(ctx.title2, "115年度購置救災設備及後勤照護設備計畫")
+        heads = [h for h, _ in pg.sections(ctx)]
+        self.assertEqual(heads, ["緣由", "目的", "辦理單位", "設置地點", "使用單位", "購置項目", "預計完成日期",
+                                 "購置經費", "驗收及管理", "其他"])
+        findings = pg.check_plan(ctx, today=TODAY)
+        titles = [f.title for f in findings]
+        self.assertIn("設備類不適用「自籌款 30%」規定", titles)
+        self.assertEqual(_titles(findings, pg.ERROR), [])
+        self.assertNotIn("餐費及紀念品未超過補助金額 50%", titles)
+        self.assertNotIn("沒有課程表", titles)
+        body = pg.submission_body(ctx)
+        self.assertIn("廠商估價單", body[2])
+        self.assertIn("申請審核表", body[2])
+        self.assertIn("臺東縣議員建議補助設備類案件建議表", body[2])
+        self.assertEqual(pg.meet_text(ctx), "災害搶救科")
+
+    def test_equipment_allows_equipment_kind_but_activity_still_rejects_it(self):
+        ctx = pg.case_context("equip_rescue", TODAY)
+        self.assertNotIn("活動類補助款不得用於資本門（購置設備）", _titles(pg.check_plan(ctx, today=TODAY), pg.ERROR))
+        data = pg.case_inputs("honor", TODAY)
+        data["items"].append({"name": "發電機", "kind": "設備購置", "qty": 1, "unit": "台", "price": 1000, "use": "x"})
+        act = pg.context_from_inputs(data, "activity")
+        self.assertIn("活動類補助款不得用於資本門（購置設備）", _titles(pg.check_plan(act, today=TODAY), pg.ERROR))
+
+    def test_equipment_warns_on_personal_gear_and_meals(self):
+        data = pg.case_inputs("equip_rescue", TODAY)
+        data["items"] += [
+            {"name": "個人制服", "kind": "設備購置", "qty": 1, "unit": "件", "price": 1000, "use": "x"},
+            {"name": "便當", "kind": "餐費", "qty": 1, "unit": "份", "price": 100, "use": "x"},
+        ]
+        titles = _titles(pg.check_plan(pg.context_from_inputs(data, "equipment"), today=TODAY), pg.WARN)
+        self.assertIn("設備類不得採購個人服裝及裝備", titles)
+        self.assertIn("設備類概算表出現餐費或紀念品", titles)
+
+    def test_equipment_docx_and_xlsx_have_no_schedule(self):
+        from docx import Document
+        from openpyxl import load_workbook
+        ctx = pg.case_context("equip_rescue", TODAY)
+        text = "\n".join(p.text for p in Document(io.BytesIO(pg.build_docx(ctx))).paragraphs)
+        self.assertIn("購置項目", text)
+        self.assertNotIn("課程表", text)
+        self.assertEqual(load_workbook(io.BytesIO(pg.build_xlsx(ctx))).sheetnames, ["經費概算表"])
 
 
 if __name__ == "__main__":

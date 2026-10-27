@@ -7,7 +7,8 @@
 - 輸出 Word 計畫書（.docx）與 Excel 概算表（.xlsx，合計用公式）。
 - 純函式、不依賴 Streamlit，也不儲存任何輸入資料。
 
-目前有兩種計畫類型：專業訓練活動、活動類（表揚／研習／文康），經費來源都是議員建議補助款。
+目前有三種計畫類型：專業訓練活動、活動類（表揚／研習／文康）、設備類（購置設備）。
+經費來源可有多筆：議員（建議縣府補助）、鄉鎮市公所代表（建議公所補助），各自列金額，加總為補助總額。
 要新增類型時，在 PLAN_TYPES 加一筆（含畫面欄位名稱），並在 sections() 提供對應的章節範本即可。
 活動類的歷史去識別化範例放在 plan_cases.py。
 """
@@ -15,7 +16,7 @@
 import calendar
 import io
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 from subsidy_check import (
@@ -25,7 +26,7 @@ from subsidy_check import (
 
 # app.py 用這個數字判斷記憶體裡的模組是不是舊版。Streamlit Cloud 重新部署時
 # 常常只重跑 app.py，sys.modules 仍留著上一版 plan_generator。
-MODULE_REVISION = 5
+MODULE_REVISION = 7
 
 PLAN_TYPES = {
     "training": {
@@ -52,6 +53,20 @@ PLAN_TYPES = {
         "method_label": "活動內容",
         "schedule_required": False,
         "show_instructors": False,
+    },
+    "equipment": {
+        "label": "設備類（購置設備）",
+        "desc": "義消／分隊購置救災、訓練、辦公設備（資本門）的案件，經費來源為議員或鄉鎮市公所代表建議補助款加自籌款。"
+                "須附廠商估價單與縣政府受理議員建議購置設備類案件申請審核表；核銷時另附財產增加單。",
+        "source_label": "議員建議補助款",
+        "kind_word": "購置",
+        "audience_label": "使用單位",
+        "headcount_label": "使用人數",
+        "schedule_label": "",
+        "method_label": "購置說明",
+        "schedule_required": False,
+        "show_instructors": False,
+        "dated": False,
     },
 }
 # 名稱含這些字的活動類案件，仍須附流程（行程）表，證明活動實質內容。
@@ -164,6 +179,93 @@ def format_councilors(text):
     return "、".join(names) if names else "ＯＯ議員"
 
 
+def format_people(text, title):
+    """每位人員只留一個職稱（議員、代表）。空白時用「ＯＯ」加職稱。"""
+    raw = str(text or "").strip()
+    parts = re.split(r"[、,，;；/]+", raw)
+    names = []
+    for part in parts:
+        part = re.sub(rf"\s*{title}\s*$", "", part).strip()
+        if part:
+            names.append(part + title)
+    return "、".join(names) if names else "ＯＯ" + title
+
+
+SOURCE_KIND_NAMES = {"councilor": "議員", "rep": "代表"}
+_SOURCE_KIND_ALIASES = {"議員": "councilor", "councilor": "councilor", "代表": "rep", "民代表": "rep", "rep": "rep"}
+
+
+def normalize_sources(sources, councilors="", subsidy=0):
+    """補助來源清單 [{"kind": councilor|rep, "names", "township", "amount"}]。
+
+    沒有填任何來源時，用 councilors 與 subsidy 組成單一議員來源（舊版輸入仍可用）。
+    """
+    out = []
+    for src in sources or []:
+        if not isinstance(src, dict):
+            continue
+        kind = _SOURCE_KIND_ALIASES.get(_text(src.get("kind")), "councilor")
+        names = _text(src.get("names"))
+        township = _text(src.get("township"))
+        amount = max(0.0, _f(src.get("amount")))
+        if not names and not township and amount == 0:
+            continue
+        out.append({"kind": kind, "names": names, "township": township, "amount": amount})
+    if not out:
+        out = [{"kind": "councilor", "names": str(councilors or "").strip(), "township": "", "amount": max(0.0, _f(subsidy))}]
+    return out
+
+
+def _township_name(src):
+    return src["township"] or "ＯＯ公所"
+
+
+def source_label_of(src):
+    """概算表備註用的來源名稱。"""
+    if src["kind"] == "rep":
+        return f"{_township_name(src)}代表建議補助款"
+    return "議員建議補助款"
+
+
+def source_phrase(src):
+    """計畫書經費段的單筆來源句（含金額）。"""
+    amount = f"新臺幣{to_cn_amount(src['amount'])}元整"
+    if src["kind"] == "rep":
+        town = _township_name(src)
+        return f"{town}{format_people(src['names'], '代表')}建議{town}補助{amount}"
+    return f"{format_councilors(src['names'])}建議縣府補助{amount}"
+
+
+def source_who(sources):
+    """陳報單用的來源名稱：議員姓名加公所名稱，例：王議員、李議員及卑南鄉公所。"""
+    people = [format_councilors(s["names"]) for s in sources if s["kind"] == "councilor"]
+    towns = []
+    for s in sources:
+        if s["kind"] == "rep" and _township_name(s) not in towns:
+            towns.append(_township_name(s))
+    left, right = "、".join(people), "、".join(towns)
+    return "及".join(x for x in (left, right) if x)
+
+
+AWARD_KINDS = ("嘉獎", "記功", "記大功")
+
+
+def normalize_awards(awards):
+    """敘獎額度 [{"role", "count", "kind", "times"}]。沒填職務或次數為 0 的列略過。"""
+    out = []
+    for a in awards or []:
+        if not isinstance(a, dict):
+            continue
+        role = _text(a.get("role"))
+        times = int(_f(a.get("times")))
+        count = int(_f(a.get("count")))
+        kind = _text(a.get("kind")) or "嘉獎"
+        if not role or times <= 0 or count <= 0:
+            continue
+        out.append({"role": role, "count": count, "kind": kind if kind in AWARD_KINDS else "嘉獎", "times": times})
+    return out
+
+
 def parse_date(value):
     if value is None or value == "":
         return None
@@ -223,9 +325,13 @@ def prepare_courses(courses, start=None, end=None):
     return rows
 
 
-def _remark(use, subsidy, self_amt, source_label):
+def _remark(use, subsidy, self_amt, source_label, source_parts=None):
     parts = []
-    if subsidy > 0.5:
+    if source_parts:
+        for label, amount in source_parts:
+            if amount > 0.5:
+                parts.append(f"{money(amount)}元由{label}支應")
+    elif subsidy > 0.5:
         parts.append(f"{money(subsidy)}元由{source_label}支應")
     if self_amt > 0.5:
         parts.append(f"{money(self_amt)}元由自籌款支應")
@@ -298,10 +404,18 @@ class PlanContext:
     purpose: str = ""
     rules: str = ""
     contact: str = ""
+    sources: list = field(default_factory=list)
+    awards: list = field(default_factory=list)
+    meet: str = ""
 
     # ---- 衍生值
     def __post_init__(self):
         self.courses = prepare_courses(self.courses, self.start, self.end)
+        given = bool(self.sources)
+        self.sources = normalize_sources(self.sources, self.councilors, self.subsidy)
+        self.awards = normalize_awards(self.awards)
+        if given:
+            self.subsidy = sum(s["amount"] for s in self.sources)
 
     @property
     def name_for_title(self):
@@ -312,6 +426,8 @@ class PlanContext:
         n = self.name_for_title
         if not n:
             return ""
+        if self.plan_type == "equipment":
+            return "購置" + n.removeprefix("購置").removesuffix("計畫")
         return n if n.endswith("活動") else n + "活動"
 
     @property
@@ -335,7 +451,7 @@ class PlanContext:
     @property
     def date_text(self):
         if not self.start or not self.end:
-            return "（尚未選擇日期）"
+            return "（尚未選擇日期）" if self.info.get("dated", True) else "（日期未定）"
         if self.start == self.end:
             return roc_date(self.start)
         return f"{roc_date(self.start)}至{roc_date(self.end)}"
@@ -357,15 +473,18 @@ class PlanContext:
     @property
     def needs_schedule(self):
         """這份計畫是否須列出課程（流程、行程）表。"""
+        if self.plan_type == "equipment":
+            return False
         if self.info["schedule_required"]:
             return True
         return any(word in (self.name or "") for word in SCHEDULE_KEYWORDS)
 
 
-def normalize_items(rows, subsidy=0, source_label="議員建議補助款"):
+def normalize_items(rows, subsidy=0, source_label="議員建議補助款", sources=None):
     """把畫面輸入的列轉成概算項目。補助款依金額比例分配，並產生「用途＋經費來源」備註。
 
     使用者只填數量、單價、用途、類別與補助總額；各列不再另填補助款。
+    有多筆補助來源（議員、公所代表）時，每個來源各自依比例分配，備註分別寫明各來源支應多少。
     """
     items = []
     for r in rows or []:
@@ -381,11 +500,37 @@ def normalize_items(rows, subsidy=0, source_label="議員建議補助款"):
             "name": name, "kind": r.get("kind") or "一般", "qty": qty, "unit": unit,
             "price": price, "total": total, "use": use, "subsidy": 0, "self": total, "remark": "",
         })
-    allocate_subsidy(items, subsidy)
-    for item in items:
+    if sources:
+        srcs = normalize_sources(sources, "", subsidy)
+        pairs = [(source_label_of(src), src["amount"]) for src in srcs]
+    else:
+        pairs = [(source_label, _f(subsidy))]
+    per_item = [[] for _ in items]
+    for label, amount in pairs:
+        trial = [dict(item) for item in items]
+        allocate_subsidy(trial, amount)
+        for n, t in enumerate(trial):
+            per_item[n].append((label, t["subsidy"]))
+    allocate_subsidy(items, sum(amount for _label, amount in pairs))
+    for item, parts in zip(items, per_item):
+        if len(pairs) > 1:
+            item["subsidy"] = sum(a for _l, a in parts)
+            item["self"] = item["total"] - item["subsidy"]
+        merged = {}
+        for label, amount in parts:
+            merged[label] = merged.get(label, 0) + amount
+        item["by_source"] = list(merged.items())
         self_amt = item["self"] if item["self"] > 0.5 else 0
-        item["remark"] = _remark(item["use"], item["subsidy"], self_amt, source_label)
+        item["remark"] = _remark(item["use"], item["subsidy"], self_amt, source_label,
+                                 item["by_source"] if len(pairs) > 1 else None)
     return items
+
+
+def _text(v):
+    """畫面表格空格可能是 None 或 NaN，統一轉成空字串。"""
+    if v is None or (isinstance(v, float) and v != v):
+        return ""
+    return str(v).strip()
 
 
 def _f(v):
@@ -411,6 +556,9 @@ RULE_GIFT = "注意要點「品項名稱適法性（宣導品 vs. 贈品/獎品�
 RULE_INTERNAL = "注意要點「內聘教官、助教鐘點費」"
 RULE_PROCUREMENT = "注意要點「陳報單：採購法規範（總經費逾 15 萬元）」；錯誤樣態「總經費逾 15 萬元，未敘明採購法依據或未加會政風室」"
 RULE_EQUIPMENT = "錯誤樣態「設備類案件缺廠商估價單或縣府審核表」（活動類補助款不得用於資本門）"
+RULE_PERSONAL_GEAR = "常見問答「活動費用用於採購服裝」；設備工程類捐助款不得支應採購個人服裝及裝備"
+RULE_EQUIPMENT_KIND = "注意要點「計畫書命名（設備類）」；設備類為購置設備（資本門）"
+PERSONAL_GEAR_WORDS = ("服裝", "制服", "個人裝備", "外套", "T恤", "鞋")
 RULE_NO_SUBSIDY = "縣府核定函：「油資、過路費、停車費」不予補助"
 RULE_MEAL_QTY ="注意要點「便當、活動耗材等合理性說明」；錯誤樣態「概算表數量與用途說明不一致」"
 ALL_CLEAR_MESSAGE = "計畫符合現行補捐助規定，可以開始匯出"
@@ -540,8 +688,10 @@ def check_plan(ctx, today=None):
                 suggestion="可維持現況（系統已省略年度）；若要自行修正，請把活動名稱裡的年度拿掉。",
             ))
 
-    # 3. 日期（須預留 1 個月 + 7 天給大隊初審，再送局本部）
-    if ctx.start is None or ctx.end is None:
+    # 3. 日期（須預留 1 個月 + 7 天給大隊初審，再送局本部）。設備類沒有活動日期，不檢查。
+    if not ctx.info.get("dated", True):
+        pass
+    elif ctx.start is None or ctx.end is None:
         missing_dates = []
         if ctx.start is None:
             missing_dates.append("開始日期")
@@ -682,6 +832,8 @@ def check_plan(ctx, today=None):
             comparison=f"補助 {money(sub)} 元，總經費 {money(total)} 元，已超過 {money(sub - total)} 元",
             suggestion="請調降補助金額或增加項目。自籌款不會以負數表示。",
         ))
+    elif ctx.plan_type == "equipment":
+        f.append(Finding(OK, "設備類不適用「自籌款 30%」規定", "大隊初審檢核表的自籌款、餐費、雜支比例只適用活動類。"))
     elif sub > SELF_FUND_THRESHOLD:
         # 5. 自籌 30%（補助已超過總經費時不再計算，避免自籌出現負數）
         self_amt = total - sub
@@ -704,7 +856,7 @@ def check_plan(ctx, today=None):
     # 6. 餐費＋紀念品 ≤ 50%
     meal_items = [i for i in ctx.items if i["kind"] in MEAL_KINDS]
     meal = sum(i["subsidy"] for i in meal_items)
-    if sub > 0:
+    if sub > 0 and ctx.plan_type != "equipment":
         cap = sub * MEAL_SOUVENIR_RATIO
         meal_where = _budget_where([i["name"] for i in meal_items]) if meal_items else "經費概算表"
         if meal > cap + 0.5:
@@ -763,7 +915,29 @@ def check_plan(ctx, today=None):
     elif nhi_items:
         f.append(Finding(OK, "二代健保補充保費全數由自籌款支應", "這類項目不分配補助款。"))
     equip = [i for i in ctx.items if i["kind"] == "設備購置"]
-    if equip:
+    if ctx.plan_type == "equipment":
+        gear_hit = {w for i in ctx.items for w in PERSONAL_GEAR_WORDS if w in (i["name"] or "")}
+        clothing = [i["name"] or "（未命名）" for i in ctx.items if any(w in (i["name"] or "") for w in PERSONAL_GEAR_WORDS)]
+        if clothing:
+            f.append(_issue(
+                WARN, "設備類不得採購個人服裝及裝備",
+                "、".join(clothing) + "：設備工程類捐助款不得支應個人服裝及裝備，裝備類應以共同裝備為宜。",
+                rule=RULE_PERSONAL_GEAR,
+                where=_budget_where(clothing),
+                comparison="品項名稱含：" + "、".join(sorted(gear_hit)),
+                suggestion="請改列共同使用的裝備；個人服裝請改走活動類（且單價不得達資本門標準 1 萬元）。",
+            ))
+        not_equip = [i["name"] or "（未命名）" for i in ctx.items if i["kind"] in MEAL_KINDS]
+        if not_equip:
+            f.append(_issue(
+                WARN, "設備類概算表出現餐費或紀念品",
+                "、".join(not_equip) + "：設備類案件是購置設備（資本門），餐費、紀念品應走活動類。",
+                rule=RULE_EQUIPMENT_KIND,
+                where=_budget_where(not_equip),
+                comparison="設備類概算表含餐費或紀念品類別",
+                suggestion="請移除餐費、紀念品，或改走活動類案件。",
+            ))
+    if equip and ctx.plan_type != "equipment":
         f.append(_issue(
             ERROR, "活動類補助款不得用於資本門（購置設備）",
             "設備購置請改走設備類案件（須附廠商估價單與縣府審核表）。",
@@ -895,6 +1069,9 @@ def check_plan(ctx, today=None):
 
 # ---------------------------------------------------------------- 文字範本
 def default_background(ctx):
+    if ctx.plan_type == "equipment":
+        return (f"{ctx.unit.strip()}因業務及勤務需要，現有相關設備數量或性能不足，為提升整體救災及訓練效能，"
+                f"爰辦理本設備購置案。")
     return (f"{ctx.unit}為提升所屬人員{_training(ctx).removesuffix('訓練')}相關專業技能，強化消防人員與義消人員共同出勤執行各項救災勤務時之"
             f"合作默契，提升救災效率及安全性，爰辦理本訓練。")
 
@@ -913,6 +1090,9 @@ def _end(text):
 
 
 def default_purpose(ctx):
+    if ctx.plan_type == "equipment":
+        what = ctx.activity.removeprefix("購置") or "相關設備"
+        return f"為充實{ctx.unit.strip()}所需之{what}，提升勤務及救災效能，保障民眾生命財產安全，特訂定本計畫。"
     if ctx.plan_type == "activity":
         return f"為辦理{ctx.activity or '本活動'}，特訂定本計畫。"
     return (f"藉由{_training(ctx)}，使參訓人員熟悉相關裝備器材之使用及操作方法，提升專業技能與實務能力，"
@@ -932,6 +1112,8 @@ def default_rules(ctx):
 
 def has_schedule_attachment(ctx):
     """是否產出「課程（流程、行程）表」附件。訓練類一律有；活動類有填才有。"""
+    if ctx.plan_type == "equipment":
+        return False
     return ctx.plan_type == "training" or bool(ctx.courses)
 
 
@@ -948,10 +1130,10 @@ def attachment_labels(ctx):
 
 
 def fund_text(ctx):
-    who = format_councilors(ctx.councilors)
     budget_label = attachment_labels(ctx)[1]
-    return (f"本案{ctx.info['kind_word']}經費共計新臺幣{to_cn_amount(ctx.total)}元整（如{budget_label}），擬由{who}建議縣府補助新臺幣"
-            f"{to_cn_amount(ctx.subsidy)}元整，其餘不足部分由{ctx.unit}自行籌措。")
+    clauses = "、".join(source_phrase(src) for src in ctx.sources)
+    rest = f"，其餘不足部分由{ctx.unit}自行籌措" if ctx.self_fund > 0.5 or ctx.total <= 0 else ""
+    return (f"本案{ctx.info['kind_word']}經費共計新臺幣{to_cn_amount(ctx.total)}元整（如{budget_label}），擬由{clauses}{rest}。")
 
 
 def _activity_sections(ctx):
@@ -983,8 +1165,45 @@ def _activity_sections(ctx):
     return out
 
 
+def _equipment_sections(ctx):
+    """設備類（購置設備）章節。格式比照歷年購置案；金額與備註在附件概算表。"""
+    bg = _end(ctx.background) if ctx.background.strip() else default_background(ctx)
+    pu = _end(ctx.purpose) if ctx.purpose.strip() else default_purpose(ctx)
+    org = [
+        "一、指導單位：臺東縣政府、臺東縣議會。",
+        "二、主辦單位：臺東縣消防局。",
+        f"三、承辦單位：{ctx.unit.strip()}。",
+    ]
+    if ctx.co_organizer.strip():
+        org.append(f"四、協辦單位：{ctx.co_organizer.strip()}。")
+    lines = []
+    for n, it in enumerate(ctx.items, 1):
+        no = _CN_PLAIN[n - 1] if n <= len(_CN_PLAIN) else str(n)
+        use = f"：{it['use'].strip().rstrip('。')}" if it.get("use") else ""
+        lines.append(f"{no}、{it['name']}{money(it['qty'])}{it['unit']}{use}。")
+    lines.append(f"詳如{attachment_labels(ctx)[1]}。")
+    out = [
+        ("緣由", [bg]),
+        ("目的", [pu]),
+        ("辦理單位", org),
+        ("設置地點", [f"{ctx.place.strip()}。"]),
+        ("使用單位", [f"{ctx.audience.strip()}" + (f"，共計{ctx.headcount}人。" if ctx.headcount else "。")]),
+        ("購置項目", lines),
+    ]
+    if ctx.end:
+        out.append(("預計完成日期", [f"{roc_date(ctx.end)}前完成購置及驗收。"]))
+    out.append(("購置經費", [fund_text(ctx)]))
+    out.append(("驗收及管理", ["設備購置完成後依規定辦理驗收，並列入財產管理，由" + ctx.unit.strip() + "指定專人保管維護。"]))
+    if ctx.supervisor.strip():
+        out.append(("督導考核", [_end(ctx.supervisor)]))
+    out.append(("其他", ["本計畫如有未盡事宜得隨時補充修正之。"]))
+    return out
+
+
 def sections(ctx):
     """回傳計畫書章節 [(標題, [段落…])]。"""
+    if ctx.plan_type == "equipment":
+        return _equipment_sections(ctx)
     if ctx.plan_type == "activity":
         return _activity_sections(ctx)
     bg =_end(ctx.background) if ctx.background.strip() else default_background(ctx)
@@ -1042,6 +1261,135 @@ def markdown_preview(ctx):
         for p in paras:
             lines.append(p + "  ")
         lines.append("")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- 陳報單（送計畫時附上）
+# 格式依 115 年成功分隊送計畫的陳報單：案由、陳報內容（一預定辦理、二經費、三檢陳文件、四敘獎）、敬會、簽核欄。
+# 活動、訓練、設備的句型相同，只有計畫名稱與檢陳文件不同。
+def plan_full_name(ctx):
+    return f"{ctx.unit.strip()}{ctx.title2}"
+
+
+def _source_names(ctx):
+    """案由用的來源說明，例：議員建議補助款、卑南鄉公所代表建議補助款。"""
+    labels = []
+    for src in ctx.sources:
+        label = source_label_of(src)
+        if label not in labels:
+            labels.append(label)
+    return "及".join(labels)
+
+
+def _equipment_reason(ctx):
+    """設備類主旨要簡述需求原因或目的。優先用緣由欄，沒填就用範本。"""
+    reason = ctx.background.strip().rstrip("。")
+    if reason:
+        return reason.removeprefix("為")
+    return f"充實{ctx.unit.strip()}救災及訓練所需設備，提升勤務效能"
+
+
+def submission_subject(ctx):
+    """案由。"""
+    return f"有關本分隊辦理『{plan_full_name(ctx)}』申請{_source_names(ctx)}案，請鑒核。"
+
+
+def _source_name(src):
+    return _township_name(src) if src["kind"] == "rep" else format_councilors(src["names"])
+
+
+def submission_attachments(ctx):
+    """陳報單檢陳文件。設備類另附廠商估價單與縣府審核表；每個補助來源附一份建議表。"""
+    kind = "設備" if ctx.plan_type == "equipment" else "活動"
+    if ctx.plan_type == "training":
+        out = ["訓練活動計畫（含課程表）", "經費概算表"]
+    elif ctx.plan_type == "equipment":
+        out = ["購置計畫", "經費概算表", "廠商估價單", "臺東縣政府受理議員建議購置設備類案件申請審核表"]
+    else:
+        out = ["活動計畫", "經費概算表"]
+        if ctx.courses:
+            out[0] = "活動計畫（含流程表）"
+    if ctx.plan_type != "equipment" and (ctx.plan_type == "training" or ctx.roster):
+        out.append("人員名冊")
+    if any(s["kind"] == "councilor" for s in ctx.sources):
+        out.append(f"臺東縣議員建議補助{kind}類案件建議表")
+    towns = []
+    for s in ctx.sources:
+        if s["kind"] == "rep" and _township_name(s) not in towns:
+            towns.append(_township_name(s))
+    for town in towns:
+        out.append(f"{town.removesuffix('公所')}代表建議補助{kind}類案件建議表")
+    if ctx.plan_type == "training":
+        out.append("訓練安全計畫與檢核表")
+    return out
+
+
+def issuing_note(ctx):
+    """發文單位提醒：僅公所補助由大隊發文；含縣府補助由局本部權責科室發文。"""
+    if all(s["kind"] == "rep" for s in ctx.sources):
+        return "本案只有公所補助，依規定由大隊發文。"
+    return "本案含縣府補助（議員建議），依規定由本局權責科室發文。"
+
+
+def award_lines(ctx):
+    """敘獎額度明細。沒有填就回傳空清單（計畫書內不寫，只在陳報單敘明並加會人事室）。"""
+    out = []
+    for n, a in enumerate(ctx.awards[: len(_CN_PLAIN)]):
+        out.append(f"（{_CN_PLAIN[n]}）{a['role']}（{a['count']}名）{a['kind']}{a['times']}次。")
+    return out
+
+
+def default_meet(ctx):
+    """敬會單位的預設值（可在畫面修改）。有敘獎時加會人事室。"""
+    units = []
+    if ctx.plan_type == "equipment":
+        units.append("災害搶救科")
+        if ctx.awards:
+            units.append("人事室")
+        return "、".join(units)
+    if ctx.plan_type == "training":
+        units += ["災害搶救科", "綜合企劃及安全衛生科"]
+    units.append("民力運用及訓練科")
+    if ctx.awards:
+        units.append("人事室")
+    units.append("會計室")
+    return "、".join(units)
+
+
+def meet_text(ctx):
+    return ctx.meet.strip() or default_meet(ctx)
+
+
+def submission_body(ctx):
+    """陳報內容（分點）。"""
+    full = plan_full_name(ctx)
+    if ctx.plan_type == "equipment":
+        if ctx.background.strip():
+            first = f"一、{_end(ctx.background)}特訂定本計畫以充實{ctx.unit.strip()}設備。"
+        else:
+            first = f"一、為{_equipment_reason(ctx)}，擬辦理「{full}」。"
+    else:
+        first = f"一、本案預訂於{ctx.date_text}於{ctx.place.strip()}辦理「{full}」。"
+    detail = ""
+    if len(ctx.sources) > 1:
+        detail = "（" + "、".join(f"{_source_name(s)}新臺幣{money(s['amount'])}元" for s in ctx.sources) + "）"
+    rest = f"，餘不足部分由{ctx.unit.strip()}自籌" if ctx.self_fund > 0.5 else ""
+    second = (f"二、本案總經費新臺幣{money(ctx.total)}元，其中由{source_who(ctx.sources)}補助本局辦理"
+              f"「{full}」新臺幣{money(ctx.subsidy)}元{detail}{rest}，建請鈞長同意辦理申請補助款事宜。")
+    third = "三、檢陳本案" + "、".join(f"「{x}」" for x in submission_attachments(ctx)) + "各一份。"
+    out = [first, second, third]
+    lines = award_lines(ctx)
+    if lines:
+        out.append("四、辦理本案出（不）力人員依規定獎（懲）勵，敘獎額度如下：")
+        out += lines
+    return out
+
+
+def submission_markdown(ctx):
+    lines = ["**臺東縣消防局○○大隊○○分隊陳報單**　　中華民國○年○月○日　○消○字第○○○號", "",
+             f"**案由**：{submission_subject(ctx)}", "", "**陳報內容**：", ""]
+    lines += [p + "  " for p in submission_body(ctx)]
+    lines += ["", f"敬會　{meet_text(ctx)}", "", "敬陳　局長", "", "承辦人　／　分（小）隊長　／　大隊長"]
     return "\n".join(lines)
 
 
@@ -1159,6 +1507,35 @@ def build_docx(ctx):
     return buf.getvalue()
 
 
+def build_submission_docx(ctx):
+    """陳報單 Word：案由、陳報內容、敬會、簽核欄，格式比照歷年陳報單。"""
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm
+
+    doc = Document()
+    sec = doc.sections[0]
+    sec.left_margin = sec.right_margin = Cm(2.2)
+    sec.top_margin = sec.bottom_margin = Cm(2.0)
+
+    _para(doc, "臺東縣消防局○○大隊○○分隊陳報單　　中華民國○年○月○日　○消○字第○○○號", 14, True,
+          WD_ALIGN_PARAGRAPH.CENTER, space_after=8)
+    t = doc.add_table(rows=4, cols=2)
+    t.style = "Table Grid"
+    body = "\n".join(submission_body(ctx)) + f"\n敬會　{meet_text(ctx)}"
+    cells = [("案　由", submission_subject(ctx)), ("陳報內容", body), ("敬陳局長", ""), ("承辦人　／　分（小）隊長　／　大隊長", "")]
+    for row, (label, text) in zip(t.rows, cells):
+        for cell, val in zip(row.cells, (label, text)):
+            cell.text = ""
+            _set_font(cell.paragraphs[0].add_run(val), 13)
+        row.cells[0].width, row.cells[1].width = Cm(3.2), Cm(13.4)
+    t.rows[3].cells[0].merge(t.rows[3].cells[1])
+    t.rows[2].cells[0].merge(t.rows[2].cells[1])
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 # ---------------------------------------------------------------- Excel
 def build_xlsx(ctx):
     from openpyxl import Workbook
@@ -1254,6 +1631,8 @@ def example_inputs(today=None):
 
 def context_from_inputs(data, plan_type="training"):
     """把 example_inputs／case_inputs 的資料轉成 PlanContext。"""
+    srcs = normalize_sources(data.get("sources"), data["councilors"], data["subsidy"])
+    subsidy = sum(src["amount"] for src in srcs)
     return PlanContext(
         plan_type=plan_type,
         unit=data["unit"],
@@ -1269,8 +1648,11 @@ def context_from_inputs(data, plan_type="training"):
         co_organizer=data["co_organizer"],
         supervisor=data["supervisor"],
         councilors=data["councilors"],
-        subsidy=data["subsidy"],
-        items=normalize_items(data["items"], subsidy=data["subsidy"]),
+        subsidy=subsidy,
+        sources=srcs if data.get("sources") else [],
+        awards=data.get("awards", []),
+        meet=data.get("meet", ""),
+        items=normalize_items(data["items"], subsidy=subsidy, sources=srcs),
         courses=data["courses"],
         roster=[],
         background=data.get("background", ""),
