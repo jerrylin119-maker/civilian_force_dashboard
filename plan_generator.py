@@ -25,7 +25,7 @@ from subsidy_check import (
 
 # app.py 用這個數字判斷記憶體裡的模組是不是舊版。Streamlit Cloud 重新部署時
 # 常常只重跑 app.py，sys.modules 仍留著上一版 plan_generator。
-MODULE_REVISION = 4
+MODULE_REVISION = 5
 
 PLAN_TYPES = {
     "training": {
@@ -1283,9 +1283,22 @@ def example_context(today=None):
     return context_from_inputs(example_inputs(today))
 
 
+def _load_plan_cases():
+    """載入歷史案例模組。長時間執行的程序可能留著舊版，檔案有更新就重新載入。"""
+    import importlib
+    import os
+    import plan_cases
+
+    stamp = os.path.getmtime(plan_cases.__file__)
+    if getattr(plan_cases, "_loaded_stamp", None) != stamp:
+        plan_cases = importlib.reload(plan_cases)
+        plan_cases._loaded_stamp = stamp
+    return plan_cases
+
+
 def case_list(plan_type):
     """某計畫類型可載入的歷史案例 [(key, label, summary)]。目前只有活動類有案例。"""
-    import plan_cases
+    plan_cases = _load_plan_cases()
     today = date.today()
     out = []
     for key in plan_cases.CASE_KEYS:
@@ -1297,7 +1310,7 @@ def case_list(plan_type):
 
 def case_inputs(key, today=None):
     """歷史案例的完整輸入資料（去識別化）。開始日落在 1 個月又 1 週之後，年度為今年。"""
-    import plan_cases
+    plan_cases = _load_plan_cases()
     today = today or date.today()
     data = plan_cases.build_case(key, today + timedelta(days=45))
     data["year"] = roc_year(today)

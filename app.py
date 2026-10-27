@@ -22,7 +22,7 @@ if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get
 
 # 與上面同一個原因：重新部署後 sys.modules 裡的 plan_generator 可能還是舊版，
 # normalize_items 沒有 subsidy 參數，計畫書產生器一載入就 TypeError。
-_PLAN_GENERATOR_REVISION = 4
+_PLAN_GENERATOR_REVISION = 5
 
 
 def load_plan_generator():
