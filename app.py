@@ -22,7 +22,7 @@ if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get
 
 # 與上面同一個原因：重新部署後 sys.modules 裡的 plan_generator 可能還是舊版，
 # normalize_items 沒有 subsidy 參數，計畫書產生器一載入就 TypeError。
-_PLAN_GENERATOR_REVISION = 3
+_PLAN_GENERATOR_REVISION = 4
 
 
 def load_plan_generator():
@@ -47,6 +47,7 @@ def load_plan_generator():
             and "subsidy" in params
             and hasattr(mod, "format_compliance_item")
             and hasattr(mod, "ALL_CLEAR_MESSAGE")
+            and hasattr(mod, "case_list")
         )
 
     if not _is_current(pg):
@@ -1395,15 +1396,18 @@ def render_settlement_check_page():
             st.success("✅ 全部項目都已完成，可以送大隊初審。")
 
 
-def _apply_plan_preset(ver, preset):
-    """把計畫書表單設成初始、空白或範例。欄位寫進下一個版本的 widget key，避免清空後殘留。"""
+def _apply_plan_preset(ver, preset, plan_type="training"):
+    """把計畫書表單設成初始、空白、範例或歷史案例（preset="case:<key>"）。
+    欄位寫進下一個版本的 widget key，避免清空後殘留。"""
     pg = load_plan_generator()
     from datetime import date, timedelta
 
     today = date.today()
     start_default = today + timedelta(days=45)
-    if preset == "sample":
-        data = pg.example_inputs(today)
+    texts = {"background": "", "purpose": "", "method": "", "rules": ""}
+    if preset == "sample" or preset.startswith("case:"):
+        data = pg.case_inputs(preset.split(":", 1)[1], today) if preset.startswith("case:") else pg.example_inputs(today)
+        texts = {k: data.get(k, "") for k in texts}
         unit, name = data["unit"], data["name"]
         year, start, end = data["year"], data["start"], data["end"]
         place, audience = data["place"], data["audience"]
@@ -1437,6 +1441,9 @@ def _apply_plan_preset(ver, preset):
             {"日期": start, "時間": "10:10－11:00", "課程內容": "", "教官／講師": ""},
             {"日期": start, "時間": "12:00－13:30", "課程內容": "午餐及休息", "教官／講師": ""},
         ]
+        if plan_type == "activity":
+            supervisor = ""
+            courses = [{"日期": None, "時間": "", "課程內容": "", "教官／講師": ""}]
         items = [{"項目": "", "類別": "一般", "數量": 0, "單位": "", "單價": 0, "用途說明": ""}]
 
     st.session_state[f"plan_unit_{ver}"] = unit
@@ -1452,10 +1459,10 @@ def _apply_plan_preset(ver, preset):
     st.session_state[f"plan_ins_{ver}"] = instructors
     st.session_state[f"plan_sup_{ver}"] = supervisor
     st.session_state[f"plan_sub_{ver}"] = int(subsidy)
-    st.session_state[f"plan_bg_{ver}"] = ""
-    st.session_state[f"plan_pu_{ver}"] = ""
-    st.session_state[f"plan_me_{ver}"] = ""
-    st.session_state[f"plan_ru_{ver}"] = ""
+    st.session_state[f"plan_bg_{ver}"] = texts["background"]
+    st.session_state[f"plan_pu_{ver}"] = texts["purpose"]
+    st.session_state[f"plan_me_{ver}"] = texts["method"]
+    st.session_state[f"plan_ru_{ver}"] = texts["rules"]
     st.session_state["plan_items"] = pd.DataFrame(items)
     st.session_state["plan_courses"] = pd.DataFrame(courses)
 
@@ -1482,23 +1489,45 @@ def render_plan_generator_page():
 
     type_keys = list(pg.PLAN_TYPES.keys())
     plan_type = st.selectbox("計畫類型", type_keys, format_func=lambda k: pg.PLAN_TYPES[k]["label"], key="plan_type_sel")
-    st.caption(pg.PLAN_TYPES[plan_type]["desc"] + "　（其他計畫類型陸續新增中）")
+    info = pg.PLAN_TYPES[plan_type]
+    st.caption(info["desc"] + "　（其他計畫類型陸續新增中）")
 
     if "plan_ver" not in st.session_state:
         st.session_state["plan_ver"] = 0
-        _apply_plan_preset(0, "starter")
+        st.session_state["plan_type_applied"] = plan_type
+        _apply_plan_preset(0, "starter", plan_type)
+    elif st.session_state.get("plan_type_applied") != plan_type:
+        # 切換計畫類型：欄位名稱與範本不同，重置成該類型的初始表單
+        new_ver = st.session_state["plan_ver"] + 1
+        _apply_plan_preset(new_ver, "starter", plan_type)
+        st.session_state["plan_ver"] = new_ver
+        st.session_state["plan_type_applied"] = plan_type
 
     c1, c2, _ = st.columns([1.3, 1.3, 4])
     with c1:
-        if st.button("📝 載入範例", use_container_width=True, key="plan_load_sample"):
+        if plan_type == "training" and st.button("📝 載入範例", use_container_width=True, key="plan_load_sample"):
             new_ver = st.session_state["plan_ver"] + 1
-            _apply_plan_preset(new_ver, "sample")
+            _apply_plan_preset(new_ver, "sample", plan_type)
             st.session_state["plan_ver"] = new_ver
             st.rerun()
     with c2:
         if st.button("🗑️ 清空重填", use_container_width=True, key="plan_clear"):
             new_ver = st.session_state["plan_ver"] + 1
-            _apply_plan_preset(new_ver, "blank")
+            _apply_plan_preset(new_ver, "blank", plan_type)
+            st.session_state["plan_ver"] = new_ver
+            st.rerun()
+    cases = pg.case_list(plan_type)
+    if cases:
+        k1, k2 = st.columns([4, 1.3])
+        labels = {key: label for key, label, _s in cases}
+        case_key = k1.selectbox("歷史案例（已去識別化，載入後再依實際情形修改）", [key for key, _l, _s in cases],
+                                format_func=lambda k: labels[k], key="plan_case_sel")
+        k1.caption(next(s for key, _l, s in cases if key == case_key)
+                   + " 載入後日期改為今天起 45 天，補助款依各項金額比例重新分配。")
+        k2.markdown("<div style='height:1.9rem'></div>", unsafe_allow_html=True)
+        if k2.button("📚 載入案例", use_container_width=True, key="plan_load_case"):
+            new_ver = st.session_state["plan_ver"] + 1
+            _apply_plan_preset(new_ver, f"case:{case_key}", plan_type)
             st.session_state["plan_ver"] = new_ver
             st.rerun()
     ver = st.session_state["plan_ver"]
@@ -1513,17 +1542,22 @@ def render_plan_generator_page():
     d_end = b2.date_input("結束日期 *", key=f"plan_end_{ver}")
     place = b3.text_input("地點 *", placeholder="例：達仁分隊訓練廣場", key=f"plan_place_{ver}")
     d1, d2 = st.columns([3, 1])
-    audience = d1.text_input("參訓對象 *", placeholder="例：本大隊所屬達仁義消人員（含教官團）", key=f"plan_aud_{ver}")
-    headcount = d2.number_input("參訓人數", min_value=0, step=1, key=f"plan_hc_{ver}")
+    audience = d1.text_input(f"{info['audience_label']} *", placeholder="例：本大隊所屬達仁義消人員（含教官團）", key=f"plan_aud_{ver}")
+    headcount = d2.number_input(info["headcount_label"], min_value=0, step=1, key=f"plan_hc_{ver}")
     e1, e2 = st.columns(2)
     co_org = e1.text_input("協辦單位（選填）", placeholder="例：大武大隊達仁分隊", key=f"plan_co_{ver}")
     councilors = e2.text_input("建議補助議員（選填，空白會填「ＯＯ議員」）", placeholder="例：王議員、李議員（不必加「議員」二字也可）", key=f"plan_cl_{ver}")
-    instructors = st.text_input("訓練師資（選填）", placeholder="例：由本分隊具備陸域救助訓練教官或助教資格之人員組成", key=f"plan_ins_{ver}")
+    if info["show_instructors"]:
+        instructors = st.text_input("訓練師資（選填）", placeholder="例：由本分隊具備陸域救助訓練教官或助教資格之人員組成", key=f"plan_ins_{ver}")
+    else:
+        instructors = ""
     supervisor = st.text_input("督導考核（選填）", placeholder="例：本大隊大隊長、副大隊長隨時督導考核", key=f"plan_sup_{ver}")
 
-    st.markdown("#### ② 課程表")
+    st.markdown(f"#### ② {info['schedule_label']}")
     st.caption("每一列請選日期（須在開始日期與結束日期之間；沒填的列會先用開始日期）。"
-               "只填了時間、課程內容還是空白的列也會保留。產出時依日期、時間排序。")
+               "只填了時間、內容還是空白的列也會保留。產出時依日期、時間排序。"
+               + ("" if info["schedule_required"] else
+                  "活動類若名稱不含「研習」「環境教育」「訓練」（例如表揚），可以不填，系統就不會產出流程表附件。"))
     date_bounds = {}
     if d_start and d_end and d_end >= d_start:
         date_bounds = {"min_value": d_start, "max_value": d_end}
@@ -1540,7 +1574,8 @@ def render_plan_generator_page():
     subsidy = st.number_input("議員建議補助款（元）", min_value=0, step=1000, key=f"plan_sub_{ver}")
     st.caption("每個品項只填數量、單價、用途說明與類別。補助款填上方的總額即可，"
                "系統依各項金額比例分配（整數元，最後一個可分配項目吸收餘數），其餘為自籌款。"
-               "二代健保補充保費不分配補助款、全數自籌。備註（用途＋經費來源）由系統自動產生。")
+               "二代健保補充保費，以及品項名稱含「油資」「過路費」「停車費」的項目，縣府不予補助，不分配補助款、全數自籌。"
+               "備註（用途＋經費來源）由系統自動產生。")
     items_df = st.data_editor(
         st.session_state["plan_items"], num_rows="dynamic", use_container_width=True, key=f"plan_item_editor_{ver}",
         column_config={
@@ -1550,12 +1585,23 @@ def render_plan_generator_page():
         },
     )
 
-    with st.expander("進階：自訂緣由、目的、訓練方式、規定事項，與參訓名冊（都可留空，系統會用範本）"):
-        bg = st.text_area("緣由（留空則自動產生）", key=f"plan_bg_{ver}", height=90)
+    is_activity = plan_type == "activity"
+    expander_title = ("進階：自訂目的、活動內容、注意事項，與參加人員名冊（目的可留空，系統會用簡短範本）" if is_activity
+                      else "進階：自訂緣由、目的、訓練方式、規定事項，與參訓名冊（都可留空，系統會用範本）")
+    with st.expander(expander_title, expanded=is_activity and bool(st.session_state.get(f"plan_pu_{ver}"))):
+        if is_activity:
+            bg = ""
+        else:
+            bg = st.text_area("緣由（留空則自動產生）", key=f"plan_bg_{ver}", height=90)
         pu = st.text_area("目的（留空則自動產生）", key=f"plan_pu_{ver}", height=90)
-        me = st.text_area("訓練方式（留空則使用範本）", key=f"plan_me_{ver}", height=90)
-        ru = st.text_area("規定事項（每行一項，留空則使用範本）", key=f"plan_ru_{ver}", height=110)
-        st.caption("參訓名冊（選填；輸入後才會產出附件三。名冊含個資，僅在本頁暫時使用）")
+        if is_activity:
+            me = st.text_area("活動內容（每行一項，留空則不產出此章）", key=f"plan_me_{ver}", height=110)
+            ru = st.text_area("注意事項（每行一項，留空則不產出此章；敘獎事項請勿寫進計畫書）", key=f"plan_ru_{ver}", height=110)
+        else:
+            me = st.text_area("訓練方式（留空則使用範本）", key=f"plan_me_{ver}", height=90)
+            ru = st.text_area("規定事項（每行一項，留空則使用範本）", key=f"plan_ru_{ver}", height=110)
+        st.caption("參加人員名冊（選填；輸入後才會產出名冊附件。名冊含個資，僅在本頁暫時使用）" if is_activity
+                   else "參訓名冊（選填；輸入後才會產出附件三。名冊含個資，僅在本頁暫時使用）")
         roster_df = st.data_editor(pd.DataFrame([{"單位": "", "職稱": "", "姓名": ""}]), num_rows="dynamic",
                                    use_container_width=True, key=f"plan_roster_{ver}")
 
@@ -1637,12 +1683,13 @@ def render_plan_generator_page():
     st.markdown("##### 草稿預覽")
     with st.expander("展開計畫書預覽", expanded=True):
         st.markdown(pg.markdown_preview(ctx))
-        st.markdown("**課程表（依日期、時間排序）**")
-        st.dataframe(pd.DataFrame([
-            {"日期": pg.roc_date(c["date"]) if c.get("date") else "（未填）",
-             "時間": c.get("time", ""), "課程內容": c.get("content", ""), "教官／講師": c.get("teacher", "")}
-            for c in ctx.courses
-        ]), use_container_width=True, hide_index=True)
+        if ctx.courses or plan_type == "training":
+            st.markdown(f"**{info['schedule_label']}（依日期、時間排序）**")
+            st.dataframe(pd.DataFrame([
+                {"日期": pg.roc_date(c["date"]) if c.get("date") else "（未填）",
+                 "時間": c.get("time", ""), "課程內容": c.get("content", ""), "教官／講師": c.get("teacher", "")}
+                for c in ctx.courses
+            ]), use_container_width=True, hide_index=True)
         st.markdown(f"**{pg.budget_title(ctx)}**")
         st.dataframe(pd.DataFrame([
             {"項次": n + 1, "項目": i["name"], "數量": i["qty"], "單位": i["unit"], "單價": i["price"],

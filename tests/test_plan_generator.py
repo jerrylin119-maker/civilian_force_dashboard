@@ -421,7 +421,7 @@ class AppLoaderTests(unittest.TestCase):
                 source_label="議員建議補助款",
             )
             self.assertEqual(items[0]["subsidy"], 1000)
-            self.assertEqual(loaded.MODULE_REVISION, 3)
+            self.assertEqual(loaded.MODULE_REVISION, 4)
         finally:
             import importlib
             importlib.reload(live)

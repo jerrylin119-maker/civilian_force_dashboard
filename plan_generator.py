@@ -7,8 +7,9 @@
 - 輸出 Word 計畫書（.docx）與 Excel 概算表（.xlsx，合計用公式）。
 - 純函式、不依賴 Streamlit，也不儲存任何輸入資料。
 
-目前只有一種計畫類型（專業訓練活動／議員建議補助款）。要新增類型時，在 PLAN_TYPES 加一筆，
-並提供對應的章節範本即可。
+目前有兩種計畫類型：專業訓練活動、活動類（表揚／研習／文康），經費來源都是議員建議補助款。
+要新增類型時，在 PLAN_TYPES 加一筆（含畫面欄位名稱），並在 sections() 提供對應的章節範本即可。
+活動類的歷史去識別化範例放在 plan_cases.py。
 """
 
 import calendar
@@ -24,19 +25,43 @@ from subsidy_check import (
 
 # app.py 用這個數字判斷記憶體裡的模組是不是舊版。Streamlit Cloud 重新部署時
 # 常常只重跑 app.py，sys.modules 仍留著上一版 plan_generator。
-MODULE_REVISION = 3
+MODULE_REVISION = 4
 
 PLAN_TYPES = {
     "training": {
         "label": "專業訓練活動（議員建議補助款）",
         "desc": "義消／分隊辦理的專業訓練、研習活動（救災、救護、宣導、環境教育等），經費來源為議員建議補助款加自籌款。",
         "source_label": "議員建議補助款",
+        "kind_word": "訓練",
+        "audience_label": "參訓對象",
+        "headcount_label": "參訓人數",
+        "schedule_label": "課程表",
+        "method_label": "訓練方式",
+        "schedule_required": True,
+        "show_instructors": True,
+    },
+    "activity": {
+        "label": "活動類（表揚／研習／文康）",
+        "desc": "績優表揚、縣外研習觀摩、環境教育暨文康等活動類案件，經費來源為議員建議補助款加自籌款。"
+                "名稱含「研習」「環境教育」「訓練」的活動仍須列出流程（行程）表。",
+        "source_label": "議員建議補助款",
+        "kind_word": "活動",
+        "audience_label": "參加對象",
+        "headcount_label": "參加人數",
+        "schedule_label": "活動流程／行程表",
+        "method_label": "活動內容",
+        "schedule_required": False,
+        "show_instructors": False,
     },
 }
+# 名稱含這些字的活動類案件，仍須附流程（行程）表，證明活動實質內容。
+SCHEDULE_KEYWORDS = ("研習", "環境教育", "訓練")
 
 ITEM_KINDS = ["一般", "餐費", "紀念品", "雜支", "內聘鐘點費", "二代健保補充保費", "設備購置"]
 FORBIDDEN_WORDS = ("聯誼", "餐敘", "聯歡", "健身")
 NHI_KIND = "二代健保補充保費"
+# 縣府核定函（115 年 7 月 24 日府民捐字第 1150164990 號）：油資、過路費、停車費不予補助。
+NO_SUBSIDY_WORDS = ("油資", "過路費", "停車費")
 # 活動開始日須在「今天 + 1 個日曆月 + 7 天」之後，讓大隊先初審再送局本部。
 # （約 37～38 天，依當月天數略有不同；不再用固定 30 天。）
 
@@ -211,9 +236,16 @@ def _remark(use, subsidy, self_amt, source_label):
     return use or body
 
 
+def _no_subsidy_words(item):
+    """品項名稱中出現的「不予補助」字眼（油資、過路費、停車費）。"""
+    name = str(item.get("name") or "")
+    return [w for w in NO_SUBSIDY_WORDS if w in name]
+
+
 def _eligible_for_subsidy(item):
     return (
         item.get("kind") != NHI_KIND
+        and not _no_subsidy_words(item)
         and _f(item.get("qty")) > 0
         and _f(item.get("price")) > 0
         and _f(item.get("total")) > 0
@@ -318,6 +350,17 @@ class PlanContext:
     def source_label(self):
         return PLAN_TYPES[self.plan_type]["source_label"]
 
+    @property
+    def info(self):
+        return PLAN_TYPES[self.plan_type]
+
+    @property
+    def needs_schedule(self):
+        """這份計畫是否須列出課程（流程、行程）表。"""
+        if self.info["schedule_required"]:
+            return True
+        return any(word in (self.name or "") for word in SCHEDULE_KEYWORDS)
+
 
 def normalize_items(rows, subsidy=0, source_label="議員建議補助款"):
     """把畫面輸入的列轉成概算項目。補助款依金額比例分配，並產生「用途＋經費來源」備註。
@@ -368,7 +411,8 @@ RULE_GIFT = "注意要點「品項名稱適法性（宣導品 vs. 贈品/獎品�
 RULE_INTERNAL = "注意要點「內聘教官、助教鐘點費」"
 RULE_PROCUREMENT = "注意要點「陳報單：採購法規範（總經費逾 15 萬元）」；錯誤樣態「總經費逾 15 萬元，未敘明採購法依據或未加會政風室」"
 RULE_EQUIPMENT = "錯誤樣態「設備類案件缺廠商估價單或縣府審核表」（活動類補助款不得用於資本門）"
-RULE_MEAL_QTY = "注意要點「便當、活動耗材等合理性說明」；錯誤樣態「概算表數量與用途說明不一致」"
+RULE_NO_SUBSIDY = "縣府核定函：「油資、過路費、停車費」不予補助"
+RULE_MEAL_QTY ="注意要點「便當、活動耗材等合理性說明」；錯誤樣態「概算表數量與用途說明不一致」"
 ALL_CLEAR_MESSAGE = "計畫符合現行補捐助規定，可以開始匯出"
 
 
@@ -427,7 +471,7 @@ def check_plan(ctx, today=None):
         field_hits = []
         for label, value in (
             ("活動名稱", ctx.name), ("申請單位", ctx.unit), ("緣由", ctx.background),
-            ("目的", ctx.purpose), ("訓練方式", ctx.method), ("規定事項", ctx.rules),
+            ("目的", ctx.purpose), (ctx.info["method_label"], ctx.method), ("規定事項", ctx.rules),
         ):
             if any(word in (value or "") for word in bad):
                 field_hits.append(label)
@@ -463,11 +507,12 @@ def check_plan(ctx, today=None):
         ))
 
     # 2. 必填
-    miss = [n for n, v in [("申請單位", ctx.unit), ("活動名稱", ctx.name), ("地點", ctx.place), ("參訓對象", ctx.audience)] if not str(v).strip()]
+    audience_label = ctx.info["audience_label"]
+    miss = [n for n, v in [("申請單位", ctx.unit), ("活動名稱", ctx.name), ("地點", ctx.place), (audience_label, ctx.audience)] if not str(v).strip()]
     if miss:
         f.append(_issue(
             ERROR, "尚有必填欄位未填", "、".join(miss),
-            rule="計畫書必填欄位（申請單位、活動名稱、地點、參訓對象）",
+            rule=f"計畫書必填欄位（申請單位、活動名稱、地點、{audience_label}）",
             where="、".join(miss),
             comparison="尚未填寫：" + "、".join(miss),
             suggestion="請補上這些欄位後再檢查。",
@@ -759,8 +804,24 @@ def check_plan(ctx, today=None):
             suggestion="請依性質改列「宣導品」；若是有獎徵答再改列「獎品」。",
         ))
 
+    # 9b. 油資、過路費、停車費不予補助（品項名稱含這些字的項目全數列為自籌）
+    fuel_items = [i for i in ctx.items if _no_subsidy_words(i)]
+    if fuel_items:
+        names = [i["name"] for i in fuel_items]
+        bundled = [i["name"] for i in fuel_items if "含" in i["name"]]
+        extra = ("「" + "」「".join(bundled) + "」把這些費用併在其他費用裡，整項都被列為自籌；"
+                 "請拆成「（不含油資、過路費、停車費）的費用」與獨立的油資、過路費、停車費品項。") if bundled else ""
+        f.append(_issue(
+            WARN, "有油資、過路費或停車費品項，縣府不予補助",
+            "、".join(names) + "：已全數列為自籌款，不分配補助款。" + extra,
+            rule=RULE_NO_SUBSIDY,
+            where=_budget_where(names),
+            comparison="品項名稱含：" + "、".join(sorted({w for i in fuel_items for w in _no_subsidy_words(i)})),
+            suggestion="這些費用須由自籌款支應；若已含在遊覽車租金等品項內，請拆成獨立品項，租車費備註註明不含這些費用。",
+        ))
+
     # 10. 備註欄
-    no_use = [i["name"] or "（未命名）" for i in ctx.items if not i["use"]]
+    no_use =[i["name"] or "（未命名）" for i in ctx.items if not i["use"]]
     if no_use:
         f.append(_issue(
             ERROR, "概算表有項目沒填「用途說明」",
@@ -775,23 +836,26 @@ def check_plan(ctx, today=None):
 
     # 11. 課程表（有填時間或日期但內容空白的列仍保留，列數與畫面一致）
     courses = list(ctx.courses)
-    if not courses:
+    sched = ctx.info["schedule_label"]
+    if not courses and not ctx.needs_schedule:
+        pass  # 活動類（如表揚）不要求流程表
+    elif not courses:
         f.append(_issue(
-            ERROR, "沒有課程表", "辦理研習、訓練活動時，計畫書內應列出詳細課程表。",
+            ERROR, f"沒有{sched}", f"辦理研習、訓練、環境教育活動時，計畫書內應列出詳細{sched}。",
             rule=RULE_COURSE,
-            where="課程表",
+            where=sched,
             comparison="沒有任何課程列",
-            suggestion="請列出課程日期、時間與內容。",
+            suggestion="請列出日期、時間與內容。",
         ))
     else:
-        f.append(Finding(OK, "已列出課程表", f"共 {len(courses)} 列。"))
+        f.append(Finding(OK, f"已列出{sched}", f"共 {len(courses)} 列。"))
         empty = [str(i) for i, course in enumerate(courses, 1) if not str(course.get("content") or "").strip()]
         if empty:
             f.append(_issue(
-                WARN, "課程表有列未填課程內容",
-                "第 " + "、".join(empty) + " 列仍會列入 Word 與 Excel，請補上課程內容，或刪除用不到的列。",
+                WARN, f"{sched}有列未填{'課程' if ctx.plan_type == 'training' else '活動'}內容",
+                "第 " + "、".join(empty) + " 列仍會列入 Word 與 Excel，請補上內容，或刪除用不到的列。",
                 rule=RULE_COURSE,
-                where="課程表第 " + "、".join(empty) + " 列",
+                where=f"{sched}第 " + "、".join(empty) + " 列",
                 comparison="這些列有日期或時間，但課程內容是空白",
                 suggestion="請補上課程內容，或刪除用不到的列。",
             ))
@@ -849,6 +913,8 @@ def _end(text):
 
 
 def default_purpose(ctx):
+    if ctx.plan_type == "activity":
+        return f"為辦理{ctx.activity or '本活動'}，特訂定本計畫。"
     return (f"藉由{_training(ctx)}，使參訓人員熟悉相關裝備器材之使用及操作方法，提升專業技能與實務能力，"
             f"強化整體救災戰力，保障民眾生命財產安全，特訂定本計畫。")
 
@@ -864,15 +930,64 @@ def default_rules(ctx):
             "三、訓練所需裝備器具，由本單位及各授課教官預先檢修及協助備妥。")
 
 
+def has_schedule_attachment(ctx):
+    """是否產出「課程（流程、行程）表」附件。訓練類一律有；活動類有填才有。"""
+    return ctx.plan_type == "training" or bool(ctx.courses)
+
+
+def attachment_labels(ctx):
+    """回傳 (流程表附件, 概算表附件, 名冊附件)；沒有流程表時為 None，後面的附件順位前移。"""
+    n = 1
+    sched = None
+    if has_schedule_attachment(ctx):
+        sched = "附件" + _CN_PLAIN[n - 1]
+        n += 1
+    budget = "附件" + _CN_PLAIN[n - 1]
+    roster = "附件" + _CN_PLAIN[n]
+    return sched, budget, roster
+
+
 def fund_text(ctx):
     who = format_councilors(ctx.councilors)
-    return (f"本案訓練經費共計新臺幣{to_cn_amount(ctx.total)}元整（如附件二），擬由{who}建議縣府補助新臺幣"
+    budget_label = attachment_labels(ctx)[1]
+    return (f"本案{ctx.info['kind_word']}經費共計新臺幣{to_cn_amount(ctx.total)}元整（如{budget_label}），擬由{who}建議縣府補助新臺幣"
             f"{to_cn_amount(ctx.subsidy)}元整，其餘不足部分由{ctx.unit}自行籌措。")
+
+
+def _activity_sections(ctx):
+    """活動類（表揚／研習／文康）章節。依歷年案件格式；敘獎事項不入計畫書。"""
+    pu = _end(ctx.purpose) if ctx.purpose.strip() else default_purpose(ctx)
+    org = [
+        "一、指導單位：臺東縣政府、臺東縣議會。",
+        "二、主辦單位：臺東縣消防局。",
+        f"三、承辦單位：{ctx.unit.strip()}。",
+    ]
+    if ctx.co_organizer.strip():
+        org.append(f"四、協辦單位：{ctx.co_organizer.strip()}。")
+    out = [
+        ("目的", [pu]),
+        ("辦理單位", org),
+        ("活動日期及地點", [f"一、時間：{ctx.date_text}。", f"二、地點：{ctx.place.strip()}。"]),
+        ("參加對象", [f"{ctx.audience.strip()}" + (f"，共計{ctx.headcount}人。" if ctx.headcount else "。")]),
+    ]
+    if ctx.method.strip():
+        out.append(("活動內容", [line.strip() for line in ctx.method.strip().split("\n") if line.strip()]))
+    if has_schedule_attachment(ctx):
+        out.append(("活動流程", [f"詳如{attachment_labels(ctx)[0]}。"]))
+    out.append(("活動經費", [fund_text(ctx)]))
+    if ctx.rules.strip():
+        out.append(("注意事項", [line.strip() for line in ctx.rules.strip().split("\n") if line.strip()]))
+    if ctx.supervisor.strip():
+        out.append(("督導考核", [_end(ctx.supervisor)]))
+    out.append(("其他", ["本計畫如有未盡事宜得隨時補充修正之。"]))
+    return out
 
 
 def sections(ctx):
     """回傳計畫書章節 [(標題, [段落…])]。"""
-    bg = _end(ctx.background) if ctx.background.strip() else default_background(ctx)
+    if ctx.plan_type == "activity":
+        return _activity_sections(ctx)
+    bg =_end(ctx.background) if ctx.background.strip() else default_background(ctx)
     pu = _end(ctx.purpose) if ctx.purpose.strip() else default_purpose(ctx)
     me = _end(ctx.method) if ctx.method.strip() else default_method(ctx)
     ru = ctx.rules.strip() or default_rules(ctx)
@@ -1000,18 +1115,27 @@ def build_docx(ctx):
         for p in paras:
             _para(doc, p, 14, indent=1.0, space_after=4)
 
-    doc.add_page_break()
-    _para(doc, "附件一", 12)
+    sched_label, budget_label, roster_label = attachment_labels(ctx)
     course_label = ctx.name_for_title
-    _para(doc, f"{ctx.year}年{ctx.unit.strip()}{course_label}訓練課程表", 16, True, WD_ALIGN_PARAGRAPH.CENTER)
-    _table(doc, ["日期", "時間", "課程內容", "教官／講師"],
-           [[roc_date(c["date"]) if c.get("date") else "", c.get("time", ""), c.get("content", ""), c.get("teacher", "")]
-            for c in ctx.courses],
-           [3.4, 3.2, 6.4, 3.6])
-    _para(doc, "備註：一、訓練地點：" + ctx.place.strip() + "。二、各項訓練課程得視現場環境、天候及實際訓練情形適時調整。", 12)
+    if sched_label:
+        doc.add_page_break()
+        _para(doc, sched_label, 12)
+        if ctx.plan_type == "activity":
+            _para(doc, f"{ctx.year}年{ctx.unit.strip()}{ctx.activity}流程表", 16, True, WD_ALIGN_PARAGRAPH.CENTER)
+            header, widths = ["日期", "時間", "活動內容", "負責人員／講師"], [3.4, 3.2, 6.4, 3.6]
+            note = ("備註：一、活動地點：" + ctx.place.strip() + "。二、各項活動流程得視現場環境、天候及實際辦理情形適時調整。")
+        else:
+            _para(doc, f"{ctx.year}年{ctx.unit.strip()}{course_label}訓練課程表", 16, True, WD_ALIGN_PARAGRAPH.CENTER)
+            header, widths = ["日期", "時間", "課程內容", "教官／講師"], [3.4, 3.2, 6.4, 3.6]
+            note = ("備註：一、訓練地點：" + ctx.place.strip() + "。二、各項訓練課程得視現場環境、天候及實際訓練情形適時調整。")
+        _table(doc, header,
+               [[roc_date(c["date"]) if c.get("date") else "", c.get("time", ""), c.get("content", ""), c.get("teacher", "")]
+                for c in ctx.courses],
+               widths)
+        _para(doc, note, 12)
 
     doc.add_page_break()
-    _para(doc, "附件二", 12)
+    _para(doc, budget_label, 12)
     _para(doc, budget_title(ctx), 16, True, WD_ALIGN_PARAGRAPH.CENTER)
     rows = [[n + 1, it["name"], money(it["qty"]), it["unit"], money(it["price"]), money(it["total"]), it["remark"]]
             for n, it in enumerate(ctx.items)]
@@ -1023,8 +1147,9 @@ def build_docx(ctx):
     roster = [r for r in ctx.roster if str(r.get("name") or "").strip()]
     if roster:
         doc.add_page_break()
-        _para(doc, "附件三", 12)
-        _para(doc, f"{ctx.year}年{ctx.unit.strip()}{course_label}參訓名冊", 16, True, WD_ALIGN_PARAGRAPH.CENTER)
+        _para(doc, roster_label, 12)
+        roster_word = "參加人員名冊" if ctx.plan_type == "activity" else "參訓名冊"
+        _para(doc, f"{ctx.year}年{ctx.unit.strip()}{course_label}{roster_word}", 16, True, WD_ALIGN_PARAGRAPH.CENTER)
         _table(doc, ["編號", "單位", "職稱", "姓名"],
                [[n + 1, r.get("unit", ""), r.get("title", ""), r.get("name", "")] for n, r in enumerate(roster)],
                [1.5, 5.0, 4.0, 4.0])
@@ -1075,18 +1200,21 @@ def build_xlsx(ctx):
     for col, w in zip("ABCDEFG", [6, 22, 8, 8, 10, 12, 52]):
         ws.column_dimensions[col].width = w
 
-    ws2 = wb.create_sheet("課程表")
-    for c, h in enumerate(["日期", "時間", "課程內容", "教官／講師"], 1):
-        ws2.cell(row=1, column=c, value=h).font = Font(name="標楷體", bold=True)
-    for n, cr in enumerate(ctx.courses, 2):
-        ws2.cell(row=n, column=1, value=roc_date(cr["date"]) if cr.get("date") else "")
-        ws2.cell(row=n, column=2, value=cr.get("time", ""))
-        ws2.cell(row=n, column=3, value=cr.get("content", ""))
-        ws2.cell(row=n, column=4, value=cr.get("teacher", ""))
-        for col in range(1, 5):
-            ws2.cell(row=n, column=col).font = Font(name="標楷體")
-    for col, w in zip("ABCD", [16, 18, 40, 18]):
-        ws2.column_dimensions[col].width = w
+    if has_schedule_attachment(ctx):
+        activity = ctx.plan_type == "activity"
+        ws2 = wb.create_sheet("活動流程表" if activity else "課程表")
+        head2 = ["日期", "時間", "活動內容", "負責人員／講師"] if activity else ["日期", "時間", "課程內容", "教官／講師"]
+        for c, h in enumerate(head2, 1):
+            ws2.cell(row=1, column=c, value=h).font = Font(name="標楷體", bold=True)
+        for n, cr in enumerate(ctx.courses, 2):
+            ws2.cell(row=n, column=1, value=roc_date(cr["date"]) if cr.get("date") else "")
+            ws2.cell(row=n, column=2, value=cr.get("time", ""))
+            ws2.cell(row=n, column=3, value=cr.get("content", ""))
+            ws2.cell(row=n, column=4, value=cr.get("teacher", ""))
+            for col in range(1, 5):
+                ws2.cell(row=n, column=col).font = Font(name="標楷體")
+        for col, w in zip("ABCD", [16, 18, 40, 18]):
+            ws2.column_dimensions[col].width = w
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -1124,10 +1252,10 @@ def example_inputs(today=None):
     }
 
 
-def example_context(today=None):
-    data = example_inputs(today)
+def context_from_inputs(data, plan_type="training"):
+    """把 example_inputs／case_inputs 的資料轉成 PlanContext。"""
     return PlanContext(
-        plan_type="training",
+        plan_type=plan_type,
         unit=data["unit"],
         year=data["year"],
         name=data["name"],
@@ -1136,7 +1264,7 @@ def example_context(today=None):
         place=data["place"],
         audience=data["audience"],
         headcount=data["headcount"],
-        method="",
+        method=data.get("method", ""),
         instructors=data["instructors"],
         co_organizer=data["co_organizer"],
         supervisor=data["supervisor"],
@@ -1145,4 +1273,37 @@ def example_context(today=None):
         items=normalize_items(data["items"], subsidy=data["subsidy"]),
         courses=data["courses"],
         roster=[],
+        background=data.get("background", ""),
+        purpose=data.get("purpose", ""),
+        rules=data.get("rules", ""),
     )
+
+
+def example_context(today=None):
+    return context_from_inputs(example_inputs(today))
+
+
+def case_list(plan_type):
+    """某計畫類型可載入的歷史案例 [(key, label, summary)]。目前只有活動類有案例。"""
+    import plan_cases
+    today = date.today()
+    out = []
+    for key in plan_cases.CASE_KEYS:
+        data = plan_cases.build_case(key, today)
+        if data["plan_type"] == plan_type:
+            out.append((key, data["label"], data["summary"]))
+    return out
+
+
+def case_inputs(key, today=None):
+    """歷史案例的完整輸入資料（去識別化）。開始日落在 1 個月又 1 週之後，年度為今年。"""
+    import plan_cases
+    today = today or date.today()
+    data = plan_cases.build_case(key, today + timedelta(days=45))
+    data["year"] = roc_year(today)
+    return data
+
+
+def case_context(key, today=None):
+    data = case_inputs(key, today)
+    return context_from_inputs(data, data["plan_type"])
