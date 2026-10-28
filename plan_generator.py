@@ -1409,7 +1409,7 @@ def award_by_amount(subsidy):
     elif s >= 50000:
         label, who = "達五萬元至十萬元以下", "單位主管及承辦人嘉獎1次；協辦人員(至多2名)嘉獎1次"
     elif s >= 20000:
-        label, who = "達兩萬元以上，未達五萬元", "承辦人嘉獎1次"
+        label, who = "達兩萬元以上，未達五萬元", "承辦人嘉獎1次；協辦人員(至多2名)嘉獎1次"
     else:
         return ""
     return f"{_AWARD_PREFIX}爭取建議補助款總額度{label}者{who}。"
