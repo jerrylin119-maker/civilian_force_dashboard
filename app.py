@@ -9,6 +9,8 @@ import re
 from datetime import datetime, timedelta, timezone
 import importlib
 import database as db
+import case_pages
+import case_registry
 import subsidy_content as sc
 
 # Streamlit Cloud 重新部署後只會重跑 app.py，已經載入記憶體的 database 模組可能還是舊版
@@ -1795,6 +1797,12 @@ def render_plan_generator_page():
                 st.markdown(line)
 
     ready = bool(unit.strip() and name.strip() and items)
+    if case_pages.is_enabled():
+        if ready and not errors:
+            st.session_state["case_handoff"] = case_registry.draft_from_plan(ctx)
+            st.success("📮 檢核沒有錯誤，可以到上方「📮 案件登錄」登錄這份計畫，資料會自動帶入。")
+        else:
+            st.session_state.pop("case_handoff", None)
     if not ready:
         st.info("請先填入申請單位、活動名稱與至少一個概算項目，才能產出草稿。")
         return
@@ -1983,6 +1991,7 @@ def render_subsidy_business_tab():
 
 SUBSIDY_VIEW_URL = "https://civilianforcedashboard.streamlit.app/?view=subsidy"
 SUBSIDY_VIEW_TABS = ["🏠 使用導覽", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✏️ 計畫書產生器", "✅ 核銷自我檢核"]
+CASE_TAB = "📮 案件登錄"   # 只有 Secrets 有 case_registry 設定時才出現
 
 
 def render_subsidy_view():
@@ -1999,9 +2008,10 @@ def render_subsidy_view():
     </div>
     """, unsafe_allow_html=True)
 
-    if st.session_state.get("top_main_nav") not in SUBSIDY_VIEW_TABS:
-        st.session_state["top_main_nav"] = SUBSIDY_VIEW_TABS[0]
-    selected = st.radio("專區導覽", SUBSIDY_VIEW_TABS, horizontal=True,
+    tabs = SUBSIDY_VIEW_TABS + ([CASE_TAB] if case_pages.is_enabled() else [])
+    if st.session_state.get("top_main_nav") not in tabs:
+        st.session_state["top_main_nav"] = tabs[0]
+    selected = st.radio("專區導覽", tabs, horizontal=True,
                         label_visibility="collapsed", key="top_main_nav")
 
     if selected == "🧭 申請與核銷流程":
@@ -2014,6 +2024,8 @@ def render_subsidy_view():
         render_plan_generator_page()
     elif selected == "✅ 核銷自我檢核":
         render_settlement_check_page()
+    elif selected == CASE_TAB:
+        case_pages.render_case_registry_page(load_plan_generator())
     else:
         render_subsidy_business_tab()
 
