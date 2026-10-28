@@ -545,6 +545,36 @@ class QuantityAndCaseNumberTests(unittest.TestCase):
         ctx = self._ctx(self._meal(30, "供訓練人員午餐"), headcount=30)
         self.assertIn("餐點與耗材數量與人數相符", self._titles(ctx, pg.OK))
 
+    def test_any_meal_above_headcount_gets_a_reminder(self):
+        use = "供學員午餐"
+        for qty, expect in ((30, None), (31, "「便當」數量比人數基準多"), (33, "「便當」數量比人數基準多"),
+                            (34, "「便當」數量與人數不相符"), (100, "「便當」數量與人數不相符")):
+            ctx = self._ctx(self._meal(qty, use), headcount=30)
+            found = [f for f in pg.check_plan(ctx, today=TODAY) if f.title.startswith("「便當」")]
+            if expect is None:
+                self.assertEqual(found, [], qty)
+            else:
+                self.assertEqual([f.title for f in found], [expect], qty)
+        mild = self._ctx(self._meal(33, use), headcount=30)
+        self.assertFalse([t for t in self._titles(mild, pg.ERROR) if t.startswith("「便當」")])   # 只多一點：提醒，不擋下
+        self.assertIn("「便當」數量比人數基準多", self._titles(mild, pg.WARN))
+
+    def test_note_with_people_count_clears_a_mild_overage_too(self):
+        ctx = self._ctx(self._meal(33, "學員30人＋工作人員3人，午餐"), headcount=30)
+        titles = [f.title for f in pg.check_plan(ctx, today=TODAY)]
+        self.assertNotIn("「便當」數量比人數基準多", titles)
+        self.assertIn("「便當」數量超過人數基準，已於用途說明註明來源", titles)
+
+    def test_table_meals_are_checked_with_a_looser_rule(self):
+        def table(qty, headcount):
+            items = [{"name": "便餐", "kind": "餐費", "qty": qty, "unit": "桌", "price": 4000, "use": "晚餐"},
+                     {"name": "紅布條", "kind": "一般", "qty": 1, "unit": "條", "price": 1000, "use": "布條"}]
+            ctx = self._ctx(items, headcount=headcount)
+            return [(f.level, f.title) for f in pg.check_plan(ctx, today=TODAY) if f.title.startswith("「便餐」")]
+        self.assertEqual(table(3, 25), [])                                    # 25 人 3 桌，正常
+        self.assertEqual(table(7, 30), [(pg.WARN, "「便餐」數量比人數基準多")])   # 30 人 7 桌：提醒
+        self.assertEqual(table(30, 25), [(pg.ERROR, "「便餐」數量與人數不相符")])  # 25 人 30 桌：離譜
+
     def test_equipment_is_not_checked(self):
         ctx = pg.case_context("equip_rescue", TODAY)
         ctx.headcount = 1

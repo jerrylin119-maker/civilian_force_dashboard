@@ -1073,12 +1073,22 @@ _MEAL_NAME = re.compile(r"便當|餐盒|午餐|中餐|晚餐|早餐|餐")
 _DRINK_NAME = re.compile(r"礦泉水|飲用水|瓶裝水|茶|飲料|果汁|咖啡|運動飲")
 _GOODS_NAME = re.compile(r"毛巾|帽|袋|資料夾|筆記|文具|識別證|名牌|貼紙|手冊|背心|雨衣")
 _MEAL_UNITS = ("份", "個", "人", "盒", "客", "組")
+_TABLE_UNITS = ("桌", "席")          # 桌餐：每桌人數不一（6～10 人），以最少 6 人估，只提醒、明顯離譜才算不符
+_PEOPLE_PER_TABLE = 6
 _DRINK_UNITS = ("瓶", "罐", "杯")
 _GOODS_UNITS = ("個", "條", "件", "本", "支", "份", "組", "頂", "張", "套", "雙")
 
 
+def _ceil(x):
+    return int(-(-x // 1))
+
+
 def _quantity_findings(ctx):
-    """名冊（或參加）人數需與便當、飲品、個人耗材數量合理對應；超過時須在用途說明註明數量來源。"""
+    """名冊（或參加）人數需與便當、桌餐、飲品、個人耗材數量合理對應。
+
+    餐點：每人每天餐數 × 人數 × 天數為基準。超過基準就提醒；超過基準 10% 以上而且用途說明沒有寫明
+    人數來源，就是不符規定。用途說明有寫「○人」這類來源，視為已說明。
+    """
     if ctx.plan_type == "equipment":
         return []
     roster_n = len([r for r in ctx.roster if str(r.get("name") or "").strip()])
@@ -1087,42 +1097,59 @@ def _quantity_findings(ctx):
         return []
     basis = f"名冊 {roster_n} 人" if roster_n else f"參加人數 {people} 人"
     days = ctx.days
-    out, checked = [], 0
+    out, lines = [], []
     for i in ctx.items:
         name, use, unit, qty = i["name"], i["use"], i["unit"], i["qty"]
         text = f"{name} {use}"
         meal = False
-        if (i["kind"] == "餐費" or _MEAL_NAME.search(name)) and unit in _MEAL_UNITS:
+        slack = 1.0
+        if (i["kind"] == "餐費" or _MEAL_NAME.search(name)) and (unit in _MEAL_UNITS or unit in _TABLE_UNITS):
             meal = True
             per, label = _meals_in(text)
-            limit = int(-(-people * days * per * 1.1 // 1))
-            how = f"{basis}、{days} 天、每人每天 {label}"
+            if unit in _TABLE_UNITS:
+                exact = _ceil(people * days * per / _PEOPLE_PER_TABLE)
+                how = f"{basis}、{days} 天、每人每天 {label}、每{unit}以 {_PEOPLE_PER_TABLE} 人估"
+                slack = 2.0
+            else:
+                exact = people * days * per
+                how = f"{basis}、{days} 天、每人每天 {label}"
+                slack = 1.1
         elif _DRINK_NAME.search(name) and unit in _DRINK_UNITS:
-            limit = people * days * 3
+            exact = people * days * 3
             how = f"{basis}、{days} 天、每人每天最多約 3 {unit}"
         elif _GOODS_NAME.search(name) and unit in _GOODS_UNITS:
-            limit = int(-(-people * 1.2 // 1))
-            how = f"{basis}、每人 1 {unit}"
+            exact = _ceil(people * 1.2)
+            how = f"{basis}、每人 1 {unit}（含約 20% 備品）"
         else:
             continue
-        checked += 1
-        if qty <= limit:
+        limit = max(exact, _ceil(exact * slack))
+        lines.append(f"「{name}」{int(qty)} {unit}（基準 {exact}）：{how}")
+        if qty <= exact:
             continue
         where = _budget_where([name])
-        if _has_qty_note(use):
+        noted = _has_qty_note(use)
+        if noted:
             out.append(Finding(OK, f"「{name}」數量超過人數基準，已於用途說明註明來源",
-                               f"{int(qty)} {unit}，{how}，合理上限約 {limit}；用途說明：{use}"))
+                               f"{int(qty)} {unit}，{how}，基準 {exact}；用途說明：{use}"))
+            continue
+        if qty <= limit:
+            out.append(_issue(
+                WARN, f"「{name}」數量比人數基準多",
+                f"{int(qty)} {unit}，{how}，基準 {exact}，多 {int(qty - exact)}。",
+                rule=RULE_MEAL_QTY, where=where,
+                comparison=f"數量 {int(qty)} {unit}，依 {how} 基準 {exact}",
+                suggestion="如果是多備或有其他人員（教官、工作人員、來賓），請在「用途說明」寫明數量來源，"
+                           "例如：學員 30 人＋工作人員 3 人，午餐。"))
             continue
         out.append(_issue(
             ERROR if meal else WARN, f"「{name}」數量與人數不相符",
-            f"{int(qty)} {unit}，{how}，合理上限約 {limit}。",
-            rule=RULE_MEAL_QTY,
-            where=where,
-            comparison=f"數量 {int(qty)} {unit}，依 {how} 約 {limit}",
+            f"{int(qty)} {unit}，{how}，基準 {exact}，上限約 {limit}。",
+            rule=RULE_MEAL_QTY, where=where,
+            comparison=f"數量 {int(qty)} {unit}，依 {how} 基準 {exact}（上限約 {limit}）",
             suggestion="請調降數量，或在「用途說明」清楚註明數量來源與用途，"
                        "例如：學員 30 人＋工作人員 10 人＋來賓 5 人，午餐及晚餐。"))
-    if checked and not any(f.level != OK for f in out):
-        out.append(Finding(OK, "餐點與耗材數量與人數相符", f"依{basis}檢查，沒有數量明顯偏多的品項。"))
+    if lines and not any(f.level != OK for f in out):
+        out.append(Finding(OK, "餐點與耗材數量與人數相符", "；".join(lines)))
     return out
 
 
