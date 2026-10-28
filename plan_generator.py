@@ -26,7 +26,7 @@ from subsidy_check import (
 
 # app.py 用這個數字判斷記憶體裡的模組是不是舊版。Streamlit Cloud 重新部署時
 # 常常只重跑 app.py，sys.modules 仍留著上一版 plan_generator。
-MODULE_REVISION = 9
+MODULE_REVISION = 10
 
 PLAN_TYPES = {
     "training": {
@@ -1050,6 +1050,60 @@ def check_plan(ctx, today=None):
     return f
 
 
+# ---------------------------------------------------------------- 餐費列（便當、便餐）與用途說明下拉
+MEAL_NAMES = ("便當", "便餐")
+MEAL_DEFAULT_UNIT = {"便當": "份", "便餐": "桌"}
+
+
+def meal_use_options(start, end):
+    """餐費「用途說明」下拉選單：計畫期間每一天的中餐、晚餐、中餐及晚餐。沒有日期時只給餐別。"""
+    opts = []
+    if start and end and end >= start and (end - start).days < 14:
+        d = start
+        while d <= end:
+            r = roc_date(d)
+            opts += [f"{r}中餐", f"{r}晚餐", f"{r}中餐及晚餐"]
+            d += timedelta(days=1)
+    return opts or ["中餐", "晚餐", "中餐及晚餐"]
+
+
+def merge_meal_use(use, note):
+    """餐費備註 = 用途說明（日期＋餐別）＋數量說明（超過人數時寫明來源）。"""
+    use, note = str(use or "").strip(), str(note or "").strip()
+    return f"{use}；{note}" if use and note else (use or note)
+
+
+def normalize_meal_rows(rows, start=None, end=None):
+    """餐費列的項目只能是「便當」「便餐」，用途說明只能是下拉選項。
+    舊資料或自由輸入的文字會改成最接近的選項，原文移到「數量說明」，不會遺失。非餐費列原樣保留。"""
+    opts = meal_use_options(start, end)
+    day = roc_date(start) if start else ""
+    out = []
+    for r in rows:
+        r = dict(r)
+        r["數量說明"] = str(r.get("數量說明") or "").strip()
+        qty = r.get("數量")
+        blank = not str(r.get("項目") or "").strip() and not (isinstance(qty, (int, float)) and qty)
+        if str(r.get("類別") or "") != "餐費" or blank:
+            out.append(r)
+            continue
+        orig = str(r.get("項目") or "").strip()
+        unit = str(r.get("單位") or "").strip()
+        use = str(r.get("用途說明") or "").strip()
+        if orig not in MEAL_NAMES:
+            r["項目"] = "便餐" if (unit in ("桌", "席") or "便餐" in orig or "桌" in orig) else "便當"
+        if not unit:
+            r["單位"] = MEAL_DEFAULT_UNIT[r["項目"]]
+        if use not in opts:
+            n, label = _meals_in(f"{orig} {use}")
+            kind = "中餐及晚餐" if n >= 2 else ("晚餐" if "晚" in label else "中餐")
+            if use:
+                r["數量說明"] = f"{r['數量說明']}；{use}" if r["數量說明"] and use not in r["數量說明"] else (r["數量說明"] or use)
+            r["用途說明"] = f"{day}{kind}" if day else kind
+        out.append(r)
+    return out
+
+
 # ---------------------------------------------------------------- 人數與餐點、耗材數量
 def _meals_in(text):
     """辨識品名或用途說明裡的餐別：午晚餐＝午餐＋晚餐。回傳 (餐數, 說明)。至少算 1 餐。"""
@@ -1106,13 +1160,14 @@ def _quantity_findings(ctx):
         if (i["kind"] == "餐費" or _MEAL_NAME.search(name)) and (unit in _MEAL_UNITS or unit in _TABLE_UNITS):
             meal = True
             per, label = _meals_in(text)
+            row_days = 1 if re.search(r"\d+年\d+月\d+日", use) else days     # 下拉選單選了某一天，就只算那一天
             if unit in _TABLE_UNITS:
-                exact = _ceil(people * days * per / _PEOPLE_PER_TABLE)
-                how = f"{basis}、{days} 天、每人每天 {label}、每{unit}以 {_PEOPLE_PER_TABLE} 人估"
+                exact = _ceil(people * row_days * per / _PEOPLE_PER_TABLE)
+                how = f"{basis}、{row_days} 天、每人每天 {label}、每{unit}以 {_PEOPLE_PER_TABLE} 人估"
                 slack = 2.0
             else:
-                exact = people * days * per
-                how = f"{basis}、{days} 天、每人每天 {label}"
+                exact = people * row_days * per
+                how = f"{basis}、{row_days} 天、每人每天 {label}"
                 slack = 1.1
         elif _DRINK_NAME.search(name) and unit in _DRINK_UNITS:
             exact = people * days * 3

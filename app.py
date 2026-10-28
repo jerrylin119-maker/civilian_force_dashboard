@@ -24,7 +24,7 @@ if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get
 
 # 與上面同一個原因：重新部署後 sys.modules 裡的 plan_generator 可能還是舊版，
 # normalize_items 沒有 subsidy 參數，計畫書產生器一載入就 TypeError。
-_PLAN_GENERATOR_REVISION = 9
+_PLAN_GENERATOR_REVISION = 10
 
 
 def load_plan_generator():
@@ -1487,7 +1487,8 @@ def _apply_plan_preset(ver, preset, plan_type="training"):
     st.session_state[f"plan_pu_{ver}"] = texts["purpose"]
     st.session_state[f"plan_me_{ver}"] = texts["method"]
     st.session_state[f"plan_ru_{ver}"] = texts["rules"]
-    st.session_state["plan_items"] = pd.DataFrame(items)
+    items = [dict(i, 數量說明="") for i in items]
+    st.session_state["plan_items"] = pd.DataFrame(pg.normalize_meal_rows(items, start, end))
     st.session_state["plan_sources"] = pd.DataFrame(sources)
     st.session_state["plan_awards"] = pd.DataFrame(awards, columns=["職務", "人數", "種類", "次數"])
     st.session_state[f"plan_meet_{ver}"] = meet
@@ -1706,26 +1707,83 @@ def _render_plan_generator_inner():
     councilors = "、".join(sc["names"] for sc in src_list if sc["kind"] == "councilor" and sc["names"])
     st.metric("補助款合計（各補助來源加總）", f"{subsidy:,.0f} 元")
     st.markdown("**經費概算表（全部項目）**")
-    st.caption("這張表是完整的概算表：所有品項（含自籌款支應的）都填在這裡。補助款只是依各項金額比例分配到各項，"
-               "其餘為自籌款，分配結果在下方「補助款分配計算預覽」。"
+    st.caption("這張表是完整的概算表：所有品項（含自籌款支應的）都填在這裡，分成「餐費」和「其他項目」兩張表。"
+               "補助款只是依各項金額比例分配到各項，其餘為自籌款，分配結果在下方「補助款分配計算預覽」。"
                "二代健保補充保費，以及品項名稱含「油資」「過路費」「停車費」的項目，縣府不予補助，不分配補助款、全數自籌。"
-               "備註欄只放「用途說明」，不顯示補助款或自籌款金額；"
-               "便當、飲品、耗材的數量如果超過人數所需，請在用途說明寫明數量來源（例：學員 30 人＋工作人員 10 人，午餐及晚餐）。")
+               "備註欄只放「用途說明」，不顯示補助款或自籌款金額。")
     item_rev = st.session_state.get("plan_item_rev", 0)
-    base_items = st.session_state["plan_items"].copy()
-    if "刪除" not in base_items.columns:
-        base_items.insert(0, "刪除", False)
-    items_df = st.data_editor(
-        base_items, num_rows="dynamic", use_container_width=True, key=f"plan_item_editor_{ver}_{item_rev}_{er}",
+    base_all = st.session_state["plan_items"].copy()
+    if "數量說明" not in base_all.columns:
+        base_all["數量說明"] = ""
+    if "刪除" in base_all.columns:
+        base_all = base_all.drop(columns=["刪除"])
+    is_meal_row = (base_all["類別"].astype(str) == "餐費") & (not is_equip)
+    meal_base = base_all[is_meal_row].reset_index(drop=True)
+    other_base = base_all[~is_meal_row].reset_index(drop=True)
+    del_help = "勾選後按下方「刪除勾選列」；勾選的列不計入下面的合計"
+
+    if is_equip:
+        meal_eff = other_base.iloc[0:0].copy()
+        marked_m = pd.Series([], dtype=bool)
+    else:
+        meal_opts = pg.meal_use_options(d_start, d_end)
+        st.markdown("**① 餐費**（便當、便餐）")
+        st.caption("類別固定是餐費，項目只能選「便當」或「便餐」，用途說明只能選計畫期間的中餐或晚餐。"
+                   "數量比人數多時，在「數量說明」寫明來源（例：學員 30 人＋工作人員 5 人）。"
+                   "桌餐的單位選「桌」。")
+        meal_in = meal_base.copy()
+        meal_in.insert(0, "刪除", False)
+        meal_df = st.data_editor(
+            meal_in, num_rows="dynamic", use_container_width=True,
+            key=f"plan_meal_editor_{ver}_{item_rev}_{er}",
+            column_order=("刪除", "類別", "項目", "用途說明", "數量", "單位", "單價", "數量說明"),
+            column_config={
+                "刪除": st.column_config.CheckboxColumn("刪除", help=del_help),
+                "類別": st.column_config.SelectboxColumn("類別", options=["餐費"], default="餐費", required=True),
+                "項目": st.column_config.SelectboxColumn("項目", options=list(pg.MEAL_NAMES), default="便當", required=True),
+                "用途說明": st.column_config.SelectboxColumn("用途說明", options=meal_opts,
+                                                         help="選計畫期間哪一天的中餐或晚餐"),
+                "數量": st.column_config.NumberColumn("數量", step=1, format="%d"),
+                "單位": st.column_config.SelectboxColumn("單位", options=["份", "個", "盒", "桌"], default="份"),
+                "單價": st.column_config.NumberColumn("單價", step=10, format="%d"),
+                "數量說明": st.column_config.TextColumn("數量說明", help="數量超過人數所需時，寫明數量來源與用途"),
+            },
+        )
+        marked_m = meal_df["刪除"].fillna(False).astype(bool)
+        meal_eff = meal_df[~marked_m].copy()
+        meal_eff["類別"] = "餐費"
+        for ix in meal_eff.index:
+            if not str(meal_eff.at[ix, "單位"] or "").strip():
+                meal_eff.at[ix, "單位"] = pg.MEAL_DEFAULT_UNIT.get(str(meal_eff.at[ix, "項目"]), "份")
+        stale = [str(u) for u in meal_eff["用途說明"].fillna("") if str(u) and str(u) not in meal_opts]
+        if stale:
+            st.warning("有餐費的用途說明不在目前計畫日期的選項內（可能改過日期）：" + "、".join(dict.fromkeys(stale))
+                       + "。請重新選擇。")
+
+    st.markdown("**② 其他項目**" if not is_equip else "**購置項目**")
+    other_in = other_base.copy()
+    other_in.insert(0, "刪除", False)
+    other_kinds = [k for k in pg.ITEM_KINDS if k != "餐費"]
+    other_df = st.data_editor(
+        other_in, num_rows="dynamic", use_container_width=True,
+        key=f"plan_item_editor_{ver}_{item_rev}_{er}",
+        column_order=("刪除", "類別", "項目", "數量", "單位", "單價", "用途說明"),
         column_config={
-            "刪除": st.column_config.CheckboxColumn("刪除", help="勾選後按下方「刪除勾選列」；勾選的列不計入下面的合計"),
-            "類別": st.column_config.SelectboxColumn("類別", options=pg.ITEM_KINDS, required=True),
+            "刪除": st.column_config.CheckboxColumn("刪除", help=del_help),
+            "類別": st.column_config.SelectboxColumn("類別", options=other_kinds, required=True,
+                                                   default="設備購置" if is_equip else "一般"),
             "數量": st.column_config.NumberColumn("數量", step=1, format="%d"),
             "單價": st.column_config.NumberColumn("單價", step=10, format="%d"),
         },
     )
-    marked = items_df["刪除"].fillna(False).astype(bool)
-    items_df_eff = items_df[~marked]
+    marked_o = other_df["刪除"].fillna(False).astype(bool)
+    other_eff = other_df[~marked_o].copy()
+    items_df_eff = pd.concat([meal_eff, other_eff], ignore_index=True)
+    items_df_eff["數量說明"] = items_df_eff["數量說明"].fillna("")
+    items_df_eff["用途合併"] = [
+        pg.merge_meal_use(u, n) if k == "餐費" else str(u or "")
+        for u, n, k in zip(items_df_eff["用途說明"].fillna(""), items_df_eff["數量說明"], items_df_eff["類別"])]
+    marked = pd.concat([marked_m, marked_o], ignore_index=True)
     qty_s = pd.to_numeric(items_df_eff["數量"], errors="coerce").fillna(0)
     price_s = pd.to_numeric(items_df_eff["單價"], errors="coerce").fillna(0)
     grand_total = float((qty_s * price_s).sum())
@@ -1748,23 +1806,25 @@ def _render_plan_generator_inner():
         qty_ok = pd.to_numeric(df["數量"], errors="coerce").fillna(0) != 0
         return df[name_ok | qty_ok]
 
-    if bb.button("🗑️ 刪除勾選列", use_container_width=True, disabled=not bool(marked.any()), key=f"plan_item_del_{ver}"):
-        kept = _blank_free(items_df_eff).drop(columns=["刪除"])
-        if kept.empty:
-            kept = pd.DataFrame([{"項目": "", "類別": "設備購置" if is_equip else "一般", "數量": 0, "單位": "",
-                                  "單價": 0, "用途說明": ""}])
-        st.session_state["plan_items"] = kept.reset_index(drop=True)
+    def _store_items(df):
+        rows = pg.normalize_meal_rows(df.drop(columns=["刪除", "用途合併"], errors="ignore").to_dict("records"),
+                                      d_start, d_end)
+        st.session_state["plan_items"] = pd.DataFrame(rows).reset_index(drop=True)
         st.session_state["plan_item_rev"] = item_rev + 1
         st.rerun()
+
+    if bb.button("🗑️ 刪除勾選列", use_container_width=True, disabled=not bool(marked.any()), key=f"plan_item_del_{ver}"):
+        kept = _blank_free(items_df_eff)
+        if kept.empty:
+            kept = pd.DataFrame([{"項目": "", "類別": "設備購置" if is_equip else "一般", "數量": 0, "單位": "",
+                                  "單價": 0, "用途說明": "", "數量說明": ""}])
+        _store_items(kept)
     if ba.button("➕ 加入範例列", use_container_width=True, disabled=not ex_pick, key=f"plan_item_add_{ver}"):
         added = pd.DataFrame([
             {"項目": ex_all[i]["name"], "類別": ex_all[i]["kind"], "數量": ex_all[i]["qty"], "單位": ex_all[i]["unit"],
-             "單價": ex_all[i]["price"], "用途說明": ex_all[i]["use"]} for i in ex_pick])
-        merged = pd.concat([_blank_free(items_df_eff).drop(columns=["刪除"]), added], ignore_index=True)
-        st.session_state["plan_items"] = merged
-        st.session_state["plan_item_rev"] = item_rev + 1
-        st.rerun()
-    st.caption("不需要的列：勾選最左邊的「刪除」後按「刪除勾選列」（也可選取整列按 Delete）。")
+             "單價": ex_all[i]["price"], "用途說明": ex_all[i]["use"], "數量說明": ""} for i in ex_pick])
+        _store_items(pd.concat([_blank_free(items_df_eff), added], ignore_index=True))
+    st.caption("不需要的列：勾選最左邊的「刪除」後按「刪除勾選列」（兩張表共用這個按鈕；也可選取整列按 Delete）。")
 
     step("進階內容與陳報單設定（選填）")
     is_activity = plan_type == "activity"
@@ -1825,7 +1885,7 @@ def _render_plan_generator_inner():
 
     items = pg.normalize_items(
         _rows(items_df_eff, {"name": "項目", "kind": "類別", "qty": "數量", "unit": "單位", "price": "單價",
-                        "use": "用途說明"}),
+                        "use": "用途合併"}),
         subsidy=float(subsidy), source_label=pg.PLAN_TYPES[plan_type]["source_label"], sources=src_list)
     courses = _rows(courses_df, {"date": "日期", "time": "時間", "content": "課程內容", "teacher": "教官／講師"})
     roster = _rows(roster_df, {"unit": "單位", "title": "職稱", "name": "姓名"})
@@ -1841,7 +1901,7 @@ def _render_plan_generator_inner():
         org_battalion=acct.battalion if acct is not None else "",
         org_unit=acct.unit if (acct is not None and acct.role == "unit") else "")
     _snapshot_generator_state(ver, {
-        "plan_items": items_df_eff.drop(columns=["刪除"], errors="ignore").reset_index(drop=True),
+        "plan_items": items_df_eff.drop(columns=["刪除", "用途合併"], errors="ignore").reset_index(drop=True),
         "plan_sources": sources_df.reset_index(drop=True),
         "plan_courses": courses_df.reset_index(drop=True),
         "plan_awards": awards_df.reset_index(drop=True),

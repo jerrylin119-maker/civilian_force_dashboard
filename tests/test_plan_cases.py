@@ -42,7 +42,7 @@ class ActivityTypeTests(unittest.TestCase):
         self.assertIn("activity", pg.PLAN_TYPES)
         self.assertEqual(pg.PLAN_TYPES["training"]["audience_label"], "參訓對象")
         self.assertEqual(pg.PLAN_TYPES["activity"]["audience_label"], "參加對象")
-        self.assertEqual(pg.MODULE_REVISION, 9)
+        self.assertEqual(pg.MODULE_REVISION, 10)
 
     def test_activity_sections_use_activity_wording_and_skip_award(self):
         ctx = _activity(purpose="表彰績優人員", method="（一）績優表揚。\n（二）頒獎。")
@@ -574,6 +574,53 @@ class QuantityAndCaseNumberTests(unittest.TestCase):
         self.assertEqual(table(3, 25), [])                                    # 25 人 3 桌，正常
         self.assertEqual(table(7, 30), [(pg.WARN, "「便餐」數量比人數基準多")])   # 30 人 7 桌：提醒
         self.assertEqual(table(30, 25), [(pg.ERROR, "「便餐」數量與人數不相符")])  # 25 人 30 桌：離譜
+
+    def test_meal_use_options_follow_the_plan_dates(self):
+        d1, d2 = date(2026, 12, 12), date(2026, 12, 13)
+        self.assertEqual(pg.meal_use_options(d1, d1),
+                         ["115年12月12日中餐", "115年12月12日晚餐", "115年12月12日中餐及晚餐"])
+        opts = pg.meal_use_options(d1, d2)
+        self.assertEqual(len(opts), 6)
+        self.assertIn("115年12月13日晚餐", opts)
+        self.assertEqual(pg.meal_use_options(None, None), ["中餐", "晚餐", "中餐及晚餐"])
+        self.assertEqual(pg.meal_use_options(d1, date(2027, 6, 1)), ["中餐", "晚餐", "中餐及晚餐"])   # 期間太長不展開
+
+    def test_meal_rows_are_forced_into_the_dropdown_choices(self):
+        d = date(2026, 12, 12)
+        rows = [
+            {"項目": "午餐", "類別": "餐費", "數量": 25, "單位": "份", "單價": 100, "用途說明": "25人午餐"},
+            {"項目": "晚餐便餐", "類別": "餐費", "數量": 3, "單位": "桌", "單價": 3500, "用途說明": "供午餐及晚餐"},
+            {"項目": "便當", "類別": "餐費", "數量": 30, "單位": "", "單價": 100, "用途說明": "115年12月12日晚餐"},
+            {"項目": "紅布條", "類別": "一般", "數量": 1, "單位": "條", "單價": 1000, "用途說明": "背景"},
+            {"項目": "", "類別": "餐費", "數量": 0, "單位": "", "單價": 0, "用途說明": ""},
+        ]
+        out = pg.normalize_meal_rows(rows, d, d)
+        self.assertEqual((out[0]["項目"], out[0]["用途說明"], out[0]["數量說明"]), ("便當", "115年12月12日中餐", "25人午餐"))
+        self.assertEqual((out[1]["項目"], out[1]["用途說明"]), ("便餐", "115年12月12日中餐及晚餐"))
+        self.assertEqual((out[2]["用途說明"], out[2]["單位"]), ("115年12月12日晚餐", "份"))   # 已是選項：不動；空單位補預設
+        self.assertEqual((out[3]["項目"], out[3]["用途說明"]), ("紅布條", "背景"))               # 非餐費原樣
+        self.assertEqual(out[4]["用途說明"], "")                                                  # 空白列不亂填
+        for r in out[:3]:
+            self.assertIn(r["項目"], pg.MEAL_NAMES)
+            self.assertIn(r["用途說明"], pg.meal_use_options(d, d))
+
+    def test_meal_use_and_note_are_merged_into_the_remark(self):
+        self.assertEqual(pg.merge_meal_use("115年12月12日中餐", ""), "115年12月12日中餐")
+        self.assertEqual(pg.merge_meal_use("115年12月12日中餐", "學員30人＋工作人員5人"),
+                         "115年12月12日中餐；學員30人＋工作人員5人")
+        self.assertEqual(pg.merge_meal_use("", "說明"), "說明")
+
+    def test_dated_meal_row_counts_only_that_day(self):
+        data = pg.case_inputs("rehab_bls", TODAY)
+        data["start"], data["end"] = date(2026, 12, 11), date(2026, 12, 12)
+        data["headcount"] = 30
+        data["items"] = self._meal(40, "115年12月11日中餐")          # 2 天活動，但這列只算 12/11 一天：30 人 → 超過
+        ctx = pg.context_from_inputs(data, "training")
+        titles = [f.title for f in pg.check_plan(ctx, today=TODAY)]
+        self.assertTrue(any(t.startswith("「便當」數量") for t in titles))
+        data["items"] = self._meal(40, "午餐")                      # 沒指定日期：整個期間 2 天，40 份合理
+        ctx = pg.context_from_inputs(data, "training")
+        self.assertFalse([f for f in pg.check_plan(ctx, today=TODAY) if f.title.startswith("「便當」")])
 
     def test_equipment_is_not_checked(self):
         ctx = pg.case_context("equip_rescue", TODAY)
