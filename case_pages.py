@@ -26,7 +26,8 @@ MAX_LOGIN_FAILS = 5
 STAGE_WIDGETS = {
     "first_review": [("first_result", "審核結果", "select", [""] + cr.FIRST_REVIEW_RESULTS),
                      ("first_by", "審核人員（留空會填您的名稱）", "text", None)],
-    "second_review": [("received", "已收件", "bool", None), ("section_dept", "承辦科室", "text", None),
+    "second_review": [("received", "已收件", "bool", None), ("section_dept", "承辦科室（改成其他科室＝轉交，轉交後您就看不到這案）", "select",
+                                             [""] + list(cr.SECTION_DEPTS)),
                       ("section_officer", "承辦人", "text", None),
                       ("apply_doc_no", "申請補助發文字號（多筆請換行）", "area", None)],
     "reply": [("approve_status", "補助單位核准進度", "text", None), ("approve_no", "核准案號（或公文文號）", "area", None),
@@ -122,12 +123,7 @@ def _cases_df(cases):
 
 
 def _visible(reg, acct):
-    cases = reg.cases()
-    if acct.role == cr.ROLE_UNIT:
-        return [c for c in cases if c["unit"] == acct.unit and c["battalion"] == acct.battalion]
-    if acct.role == cr.ROLE_BATTALION:
-        return [c for c in cases if c["battalion"] == acct.battalion]
-    return cases
+    return reg.visible_cases(acct)
 
 
 def _flash():
@@ -210,7 +206,8 @@ def _stage_form(reg, acct, case, stage, expanded):
             for key, label, kind, opts in widgets:
                 cur = case[key]
                 if kind == "select":
-                    vals[key] = st.selectbox(label, opts, index=opts.index(cur) if cur in opts else 0)
+                    start = cur or (acct.unit if key == "section_dept" else "")
+                    vals[key] = st.selectbox(label, opts, index=opts.index(start) if start in opts else 0)
                 elif kind == "bool":
                     vals[key] = st.checkbox(label, value=cr._truthy(cur))
                 elif kind == "area":
@@ -287,8 +284,10 @@ def _resubmit_form(reg, acct, case):
         st.rerun()
 
 
-def _page_log(reg):
+def _page_log(reg, acct):
     rows = reg.store.read_log(300)
+    seen = {c.case_no for c in _visible(reg, acct)}
+    rows = [r for r in rows if r.get("案件編號") in seen]
     if not rows:
         st.info("還沒有異動紀錄。")
         return
@@ -391,7 +390,7 @@ def render_case_registry_page(pg=None):
     elif nav == "✍️ 處理案件":
         _page_handle(reg, acct)
     elif nav == "🧾 異動紀錄":
-        _page_log(reg)
+        _page_log(reg, acct)
     elif nav == "🔧 帳號管理":
         _page_accounts(book, acct)
     else:

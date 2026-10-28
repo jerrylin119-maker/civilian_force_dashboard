@@ -115,15 +115,47 @@ class DeptRuleTests(unittest.TestCase):
         no = self.reg.submit(self.bn, dict(sample(), unit="成功大隊"))
         self.assertEqual(self.reg.get(no)["unit"], "成功大隊")
 
-    def test_receiving_sets_dept_and_locks_others_out(self):
-        self.assertTrue(self.reg.is_mine(self.civil, self.reg.get(self.no)))
-        self.assertTrue(self.reg.is_mine(self.rescue, self.reg.get(self.no)))     # 還沒收件，各科都能收
+    def test_unassigned_case_visible_to_all_sections_then_only_to_owner(self):
+        civil_list = lambda who: [c.case_no for c in self.reg.visible_cases(who)]
+        other = self.book.authenticate("資通作業科", "0000")
+        for who in (self.civil, self.rescue, other):                     # 還沒接案，各科都看得到、都能接
+            self.assertIn(self.no, civil_list(who))
+            self.assertTrue(self.reg.is_mine(who, self.reg.get(self.no)))
         self.reg.update_stage(self.rescue, self.no, "second_review", {"received": True})
         c = self.reg.get(self.no)
         self.assertEqual(c["section_dept"], "災害搶救科")
-        self.assertFalse(self.reg.can_edit(self.book.authenticate("資通作業科", "0000"), "reply", c))
+        self.assertIn(self.no, civil_list(self.rescue))
+        self.assertNotIn(self.no, civil_list(self.civil))                # 民力訓練科也看不到
+        self.assertNotIn(self.no, civil_list(other))
+        for who in (self.civil, other):
+            self.assertFalse(self.reg.can_edit(who, "reply", c))
+            self.assertFalse(self.reg.can_edit(who, "note", c))
+            with self.assertRaises(cr.RegistryError):
+                self.reg.update_stage(who, self.no, "reply", {"approve_status": "已核准"})
         self.assertTrue(self.reg.can_edit(self.rescue, "reply", c))
-        self.assertTrue(self.reg.can_edit(self.civil, "reply", c))                # 民力訓練科可處理所有科室
+        self.assertIn(self.no, civil_list(self.unit))                    # 分隊、大隊不受影響
+        self.assertIn(self.no, civil_list(self.bn))
+
+    def test_handing_over_to_another_section(self):
+        self.reg.update_stage(self.rescue, self.no, "second_review", {"received": True})
+        self.reg.update_stage(self.rescue, self.no, "second_review", {"section_dept": "民力運用及訓練科"})
+        c = self.reg.get(self.no)
+        self.assertEqual(c["section_dept"], "民力運用及訓練科")
+        self.assertIn(self.no, [x.case_no for x in self.reg.visible_cases(self.civil)])
+        self.assertNotIn(self.no, [x.case_no for x in self.reg.visible_cases(self.rescue)])
+
+    def test_dept_must_be_a_known_section(self):
+        with self.assertRaises(cr.RegistryError):
+            self.reg.update_stage(self.rescue, self.no, "second_review", {"received": True, "section_dept": "亂寫科"})
+
+    def test_dept_names_match_account_names(self):
+        self.assertEqual(tuple(ca.SECTIONS.values()), cr.SECTION_DEPTS)
+
+    def test_battalion_and_unit_visibility(self):
+        other_bn = self.book.authenticate("關山大隊", "0000")
+        other_unit = self.book.authenticate("東河分隊", "0000")
+        self.assertEqual(self.reg.visible_cases(other_bn), [])
+        self.assertEqual(self.reg.visible_cases(other_unit), [])
 
     def test_is_mine_for_unit_and_battalion(self):
         c = self.reg.get(self.no)

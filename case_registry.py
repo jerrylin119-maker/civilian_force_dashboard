@@ -100,7 +100,9 @@ STAGE_PREREQ = {
 
 BOOL_FIELDS = {"received", "no_defect"}   # 試算表裡存 TRUE / FALSE（勾選方塊）
 
-ADMIN_LOGINS = {"民力訓練科"}
+ADMIN_LOGINS = {"民力訓練科"}   # 只管帳號重設；看不到其他科室承接的案件
+# 承辦科室（寫進「承辦科室」欄的全名），需與 case_accounts.SECTIONS 的值一致
+SECTION_DEPTS = ("民力運用及訓練科", "緊急救護科", "資通作業科", "災害搶救科", "預防調查科", "綜合企劃科")
 # 這些階段的資料屬於「承辦科室」，收件後只有該科室（或民力訓練科）能改
 DEPT_STAGES = {"second_review", "reply", "settle_second", "defect"}
 
@@ -529,19 +531,29 @@ class CaseRegistry:
                 return False
             if account.role == ROLE_UNIT and account.unit and case["unit"] != account.unit:
                 return False
-        if account.role == ROLE_SECTION and case is not None and stage in DEPT_STAGES:
-            dept = _clean(case["section_dept"])
-            if dept and not account.is_admin and account.unit != dept:
-                return False
+        if case is not None and not self.can_view(account, case):
+            return False
         return True
+
+    def can_view(self, account, case):
+        """分隊只看自己的；大隊只看自己大隊的；科室：案件還沒有承辦科室時都看得到（可接案），
+        接案之後只有承辦科室看得到。"""
+        if account.role == ROLE_UNIT:
+            return case["unit"] == account.unit and case["battalion"] == account.battalion
+        if account.role == ROLE_BATTALION:
+            return case["battalion"] == account.battalion
+        dept = _clean(case["section_dept"])
+        return not dept or dept == account.unit
+
+    def visible_cases(self, account, cases=None):
+        return [c for c in (cases if cases is not None else self.cases()) if self.can_view(account, c)]
 
     def is_mine(self, account, case):
         """這件案子現在是否輪到這個帳號處理（用於「輪到我處理」）。"""
         if cr_pending(case) != account.role:
             return False
         if account.role == ROLE_SECTION:
-            dept = _clean(case["section_dept"])
-            return not dept or account.is_admin or account.unit == dept
+            return self.can_view(account, case)
         return self.can_edit(account, "first_review" if account.role == ROLE_BATTALION else "submit", case)
 
     # ---- 登錄
@@ -632,6 +644,9 @@ class CaseRegistry:
         bad = set(changes) - allowed
         if bad:
             raise RegistryError("欄位不屬於這個階段：" + "、".join(sorted(bad)))
+        dept_new = _clean(changes.get("section_dept"))
+        if dept_new and dept_new not in SECTION_DEPTS:
+            raise RegistryError("承辦科室不在清單內")
         clean = {}
         for k, v in changes.items():
             if k in BOOL_FIELDS:
