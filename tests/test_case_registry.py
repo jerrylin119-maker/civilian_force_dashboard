@@ -64,6 +64,12 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(self.store.rows[3][32], no2)
         self.assertEqual([c.case_no for c in self.reg.cases()], [no, no2])
 
+    def test_failed_attempts_are_logged_without_case_number(self):
+        self.reg.log_event(self.unit, "登錄未成功", "爭取經費不能大於計畫總經費", "手動填寫")
+        row = self.store.read_log()[-1]
+        self.assertEqual((row["案件編號"], row["階段"], row["帳號"]), ("", "登錄未成功", "u"))
+        self.assertFalse(self.reg.log_failed)
+
     def test_case_numbers_are_per_battalion_and_sequential(self):
         a = self.reg.submit(self.unit, sample())
         b = self.reg.submit(self.unit, sample())

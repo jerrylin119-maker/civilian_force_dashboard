@@ -165,7 +165,7 @@ def _page_new(reg, acct, pg):
         battalion = st.selectbox("所屬大隊", bn_list, index=bn_list.index(bn_default), disabled=is_unit)
         unit = st.text_input("承辦單位（大隊本身辦理填大隊名稱）",
                              value=acct.unit if is_unit else (data.get("unit", "") or acct.battalion), disabled=is_unit)
-        officer = st.text_input("承辦人", value=data.get("officer", "") or acct.display)
+        officer = st.text_input("承辦人", value=data.get("officer", ""))
         purpose = st.selectbox("經費用途", cr.PURPOSES,
                                index=cr.PURPOSES.index(data["purpose"]) if data.get("purpose") in cr.PURPOSES else 0)
         plan_name = st.text_input("計畫名稱", value=data.get("plan_name", ""))
@@ -187,9 +187,11 @@ def _page_new(reg, acct, pg):
                 "source_kind": source_kind, "source_detail": source_detail,
             }, source="計畫產生器" if hand else "手動填寫")
         except cr.RegistryError as exc:
+            reg.log_event(acct, "登錄未成功", str(exc), "計畫產生器" if hand else "手動填寫")
             st.error(str(exc))
             return
         except Exception as exc:
+            reg.log_event(acct, "登錄失敗", f"{type(exc).__name__}", "計畫產生器" if hand else "手動填寫")
             st.error(f"寫入失敗，案件沒有登錄：{type(exc).__name__}。請稍後再試或通知管理者。")
             return
         st.session_state.pop("case_handoff", None)
@@ -287,7 +289,8 @@ def _resubmit_form(reg, acct, case):
 def _page_log(reg, acct):
     rows = reg.store.read_log(300)
     seen = {c.case_no for c in _visible(reg, acct)}
-    rows = [r for r in rows if r.get("案件編號") in seen]
+    rows = [r for r in rows if r.get("案件編號") in seen
+            or (not r.get("案件編號") and (acct.is_admin or r.get("帳號") == acct.login))]
     if not rows:
         st.info("還沒有異動紀錄。")
         return
@@ -295,6 +298,29 @@ def _page_log(reg, acct):
 
 
 # ---------------------------------------------------------------- 入口
+def login_gate():
+    """給其他頁面（計畫書產生器）用：回傳 (是否啟用登入, 已登入的帳號)。
+    沒有設定案件登錄時不要求登入；已啟用但未登入時，顯示登入框並回傳 (True, None)。"""
+    cfg = get_config()
+    if cfg is None:
+        return False, None
+    try:
+        reg = get_registry(cfg)
+        book = get_accounts(reg)
+    except cr.StoreError as exc:
+        st.error(str(exc))
+        return True, None
+    except Exception as exc:
+        st.error(f"無法連線到案件資料：{type(exc).__name__}")
+        return True, None
+    acct = st.session_state.get("case_user")
+    if acct is None:
+        st.info("使用計畫書產生器要先登入，系統才能帶入您的單位，之後也能直接登錄案件。")
+        _login_box(book)
+        return True, None
+    return True, acct
+
+
 def _page_password(book, acct):
     if acct.must_change:
         st.warning("您還在使用預設密碼 0000，請更新密碼。")

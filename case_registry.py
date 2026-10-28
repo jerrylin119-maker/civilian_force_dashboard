@@ -709,6 +709,13 @@ class CaseRegistry:
         return diff
 
     # ---- 紀錄
+    def log_event(self, account, stage, text, source=""):
+        """沒有案件編號的事件（例如登錄失敗）。寫不進去不影響主流程，但會在畫面提醒。"""
+        try:
+            self.store.append_log([now_text(), "", account.login, ROLE_LABELS[account.role], stage, text, source])
+        except Exception:
+            self.log_failed = True
+
     def _log(self, account, case_no, stage, changes, source=""):
         try:
             self.store.append_log([now_text(), case_no, account.login, ROLE_LABELS[account.role],

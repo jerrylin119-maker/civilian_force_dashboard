@@ -24,7 +24,7 @@ if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get
 
 # 與上面同一個原因：重新部署後 sys.modules 裡的 plan_generator 可能還是舊版，
 # normalize_items 沒有 subsidy 參數，計畫書產生器一載入就 TypeError。
-_PLAN_GENERATOR_REVISION = 8
+_PLAN_GENERATOR_REVISION = 9
 
 
 def load_plan_generator():
@@ -1467,6 +1467,9 @@ def _apply_plan_preset(ver, preset, plan_type="training"):
         items = [{"項目": "", "類別": "設備購置" if plan_type == "equipment" else "一般",
                   "數量": 0, "單位": "", "單價": 0, "用途說明": ""}]
 
+    acct = st.session_state.get("case_user")
+    if acct is not None:
+        unit = _default_squad_name(acct) or unit      # 已登入：申請單位用自己的單位，不用範例的
     st.session_state[f"plan_unit_{ver}"] = unit
     st.session_state[f"plan_name_{ver}"] = name
     st.session_state[f"plan_year_{ver}"] = int(year)
@@ -1491,6 +1494,21 @@ def _apply_plan_preset(ver, preset, plan_type="training"):
     st.session_state["plan_courses"] = pd.DataFrame(courses)
 
 
+def _default_squad_name(acct):
+    """申請單位預設值：分隊帳號「台東救護分隊」→「臺東救護義消分隊」；大隊帳號用大隊名稱。可再修改。"""
+    if acct.role == "unit" and acct.unit:
+        base = acct.unit.replace("台東", "臺東")
+        return base if base.endswith("義消分隊") else base.replace("分隊", "義消分隊")
+    if acct.role == "battalion":
+        return acct.battalion.replace("台東", "臺東")
+    return ""
+
+
+def _step_heading(text):
+    st.markdown(f'<h4 style="color:#dc2626; margin:1.5rem 0 0.3rem 0; font-weight:700;">{text}</h4>',
+                unsafe_allow_html=True)
+
+
 def render_plan_generator_page():
     """✏️ 計畫書產生器：選計畫類型、填必要資料，產出計畫書（Word）與概算表（Excel）草稿。
 
@@ -1511,6 +1529,19 @@ def render_plan_generator_page():
     </div>
     """, unsafe_allow_html=True)
 
+    enabled, acct = case_pages.login_gate()
+    if enabled and acct is None:
+        return
+    if acct is not None:
+        st.caption(f"登入：{acct.label}　申請單位會自動帶入您的單位，需要時仍可修改。")
+
+    step_no = [0]
+
+    def step(title):
+        step_no[0] += 1
+        _step_heading(f"步驟{'零一二三四五六七八九十'[step_no[0]]}：{title}")
+
+    step("選擇計畫類型")
     type_keys = list(pg.PLAN_TYPES.keys())
     plan_type = st.selectbox("計畫類型", type_keys, format_func=lambda k: pg.PLAN_TYPES[k]["label"], key="plan_type_sel")
     info = pg.PLAN_TYPES[plan_type]
@@ -1527,19 +1558,25 @@ def render_plan_generator_page():
         _apply_plan_preset(new_ver, "starter", plan_type)
         st.session_state["plan_ver"] = new_ver
         st.session_state["plan_type_applied"] = plan_type
+        st.session_state["plan_started"] = False       # 換類型要重新選「載入案例」或「清空重填」
 
+    step("載入歷史案例，或清空重填")
+    st.caption("選一個和你案件最像的歷史案例，按「載入案例」後再依實際情形修改；也可以按「清空重填」從空白開始。"
+               "按了其中一個，下面的填寫欄位才會出現。")
     c1, c2, _ = st.columns([1.3, 1.3, 4])
     with c1:
         if plan_type == "training" and st.button("📝 載入範例", use_container_width=True, key="plan_load_sample"):
             new_ver = st.session_state["plan_ver"] + 1
             _apply_plan_preset(new_ver, "sample", plan_type)
             st.session_state["plan_ver"] = new_ver
+            st.session_state["plan_started"] = True
             st.rerun()
     with c2:
         if st.button("🗑️ 清空重填", use_container_width=True, key="plan_clear"):
             new_ver = st.session_state["plan_ver"] + 1
             _apply_plan_preset(new_ver, "blank", plan_type)
             st.session_state["plan_ver"] = new_ver
+            st.session_state["plan_started"] = True
             st.rerun()
     cases = pg.case_list(plan_type)
     if cases:
@@ -1554,10 +1591,14 @@ def render_plan_generator_page():
             new_ver = st.session_state["plan_ver"] + 1
             _apply_plan_preset(new_ver, f"case:{case_key}", plan_type)
             st.session_state["plan_ver"] = new_ver
+            st.session_state["plan_started"] = True
             st.rerun()
     ver = st.session_state["plan_ver"]
+    if not st.session_state.get("plan_started"):
+        st.info("👆 請先按上面的「載入案例」或「清空重填」，接下來的填寫欄位才會出現。")
+        return
 
-    st.markdown("#### ① 基本資料")
+    step("基本資料")
     a1, a2, a3 = st.columns([2, 2, 1])
     unit = a1.text_input("申請單位 *", placeholder="例：達仁義消分隊", key=f"plan_unit_{ver}")
     name = a2.text_input("活動名稱 *", placeholder="例：繩索救助訓練（不必寫年度與「計畫」）", key=f"plan_name_{ver}")
@@ -1584,7 +1625,7 @@ def render_plan_generator_page():
     if is_equip:
         courses_df = st.session_state["plan_courses"]
     else:
-        st.markdown(f"#### ② {info['schedule_label']}")
+        step(info["schedule_label"])
         st.caption("每一列請選日期（須在開始日期與結束日期之間；沒填的列會先用開始日期）。"
                    "只填了時間、內容還是空白的列也會保留。產出時依日期、時間排序。"
                    + ("" if info["schedule_required"] else
@@ -1601,7 +1642,7 @@ def render_plan_generator_page():
             },
         )
 
-    st.markdown("#### ③ 經費概算")
+    step("經費概算")
     st.markdown("**補助來源**（可多筆）")
     st.caption("類型選「議員」是議員建議、縣府補助；選「代表」是鄉鎮市公所代表建議、公所補助，並填公所名稱。"
                "姓名可填多位（用「、」分開，不必加職稱）。每筆各填金額，補助總額為各筆加總。")
@@ -1622,7 +1663,7 @@ def render_plan_generator_page():
     st.metric("補助款合計（各補助來源加總）", f"{subsidy:,.0f} 元")
     st.markdown("**經費概算表（全部項目）**")
     st.caption("這張表是完整的概算表：所有品項（含自籌款支應的）都填在這裡。補助款只是依各項金額比例分配到各項，"
-               "其餘為自籌款，分配結果在下方「補助款分配結果」。"
+               "其餘為自籌款，分配結果在下方「補助款分配計算預覽」。"
                "二代健保補充保費，以及品項名稱含「油資」「過路費」「停車費」的項目，縣府不予補助，不分配補助款、全數自籌。"
                "備註（用途＋經費來源）由系統自動產生。")
     item_rev = st.session_state.get("plan_item_rev", 0)
@@ -1680,6 +1721,7 @@ def render_plan_generator_page():
         st.rerun()
     st.caption("不需要的列：勾選最左邊的「刪除」後按「刪除勾選列」（也可選取整列按 Delete）。")
 
+    step("進階內容與陳報單設定（選填）")
     is_activity = plan_type == "activity"
     expander_title = ("進階：自訂緣由（需求原因）與目的（都可留空，系統會用範本）" if is_equip
                       else "進階：自訂目的、活動內容、注意事項，與參加人員名冊（目的可留空，系統會用簡短範本）" if is_activity
@@ -1708,17 +1750,24 @@ def render_plan_generator_page():
             roster_df = st.data_editor(pd.DataFrame([{"單位": "", "職稱": "", "姓名": ""}]), num_rows="dynamic",
                                        use_container_width=True, key=f"plan_roster_{ver}")
 
-    with st.expander("陳報單設定（選填）：敘獎額度、敬會單位", expanded=bool(len(st.session_state["plan_awards"]))):
-        st.caption("敘獎事項只寫在陳報單，不寫進計畫書。有填敘獎時，敬會單位會自動加上人事室。"
-                   "敘獎的金額、天數門檻之後會補上自動提示，目前請自行判斷是否填寫。")
-        awards_df = st.data_editor(
-            st.session_state["plan_awards"], num_rows="dynamic", use_container_width=True, key=f"plan_award_editor_{ver}",
-            column_config={
-                "種類": st.column_config.SelectboxColumn("種類", options=list(pg.AWARD_KINDS), required=True),
-                "人數": st.column_config.NumberColumn("人數", step=1, format="%d"),
-                "次數": st.column_config.NumberColumn("次數", step=1, format="%d"),
-            },
-        )
+    with st.expander("陳報單設定：獎懲（第四點）、敬會單位", expanded=True):
+        st.caption("獎懲只寫在陳報單，不寫進計畫書。依「消防專業人員平時考核獎懲標準」："
+                   "金額依爭取建議補助款總額度；天數依活動辦理時程及支援勤務天數。有獎懲時，敬會單位會自動加上人事室。")
+        award_basis = st.radio("獎懲依據", list(pg.AWARD_BASES), format_func=lambda k: pg.AWARD_BASES[k],
+                               horizontal=True, key=f"plan_award_basis_{ver}")
+        award_box = st.container()
+        if award_basis == "custom":
+            awards_df = st.data_editor(
+                st.session_state["plan_awards"], num_rows="dynamic", use_container_width=True,
+                key=f"plan_award_editor_{ver}",
+                column_config={
+                    "種類": st.column_config.SelectboxColumn("種類", options=list(pg.AWARD_KINDS), required=True),
+                    "人數": st.column_config.NumberColumn("人數", step=1, format="%d"),
+                    "次數": st.column_config.NumberColumn("次數", step=1, format="%d"),
+                },
+            )
+        else:
+            awards_df = st.session_state["plan_awards"].iloc[0:0]
         meet = st.text_input("敬會單位（留空則依計畫類型自動帶入）", key=f"plan_meet_{ver}",
                              placeholder="例：災害搶救科、民力運用及訓練科、人事室、會計室")
 
@@ -1741,10 +1790,24 @@ def render_plan_generator_page():
         roster=roster, background=bg, purpose=pu, rules=ru, sources=src_list,
         awards=[{"role": r.get("職務"), "count": r.get("人數"), "kind": r.get("種類"), "times": r.get("次數")}
                 for r in awards_df.to_dict("records")],
-        meet=meet)
+        meet=meet, award_basis=award_basis,
+        org_battalion=acct.battalion if acct is not None else "",
+        org_unit=acct.unit if (acct is not None and acct.role == "unit") else "")
+    with award_box:
+        _award = pg.award_text(ctx)
+        if award_basis == "none":
+            st.caption("不敘獎：陳報單不會有第四點。")
+        elif _award:
+            st.info("陳報單第四點會寫：\n\n" + "四、獎懲：" + _award.replace("\n", "  \n"))
+        elif award_basis == "amount":
+            st.caption("爭取建議補助款未達兩萬元，標準裡沒有對應的獎勵額度，陳報單不會有第四點。")
+        elif award_basis == "days":
+            st.caption("需要有活動開始、結束日期才能依天數計算（設備類沒有活動日期）。")
+        else:
+            st.caption("尚未輸入敘獎額度。")
 
     if items:
-        st.markdown("**補助款分配結果（唯讀）**")
+        st.markdown("**補助款分配計算預覽（唯讀）**")
         st.caption("依各項金額比例自動計算，不能手動修改。自籌款不會顯示負數。")
         alloc_rows = []
         for item in items:
@@ -1760,7 +1823,7 @@ def render_plan_generator_page():
         st.dataframe(pd.DataFrame(alloc_rows), use_container_width=True, hide_index=True)
 
     st.markdown("---")
-    st.markdown("#### ④ 規定檢查與草稿")
+    step("規定檢查")
     if items:
         m1, m2, m3 = st.columns(3)
         m1.metric("總經費", f"{ctx.total:,.0f}")
@@ -1806,7 +1869,7 @@ def render_plan_generator_page():
     if not ready:
         st.info("請先填入申請單位、活動名稱與至少一個概算項目，才能產出草稿。")
         return
-    st.markdown("##### 草稿預覽")
+    step("預覽與下載")
     with st.expander("展開計畫書預覽", expanded=True):
         st.markdown(pg.markdown_preview(ctx))
         if ctx.courses or plan_type == "training":
@@ -1826,7 +1889,7 @@ def render_plan_generator_page():
         st.caption(pg.budget_note(ctx))
     with st.expander("展開陳報單預覽（送計畫時附上）", expanded=False):
         st.markdown(pg.submission_markdown(ctx))
-        st.caption("活動、訓練、設備的陳報單句型相同，只有計畫名稱與檢陳文件不同。字號、日期請自行填寫。"
+        st.caption("活動、訓練、設備的陳報單句型相同，只有計畫名稱與檢陳文件不同。日期、字號請自行填寫。"
                    + pg.issuing_note(ctx)
                    + ("設備類須附廠商估價單與縣政府設備類審核表；核銷時另附財產增加單。" if is_equip else ""))
     base = f"{ctx.year}年{ctx.unit.strip()}{ctx.name_for_title}"
