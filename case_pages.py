@@ -321,6 +321,19 @@ def login_gate():
     return True, acct
 
 
+def submit_draft(acct, draft):
+    """計畫書產生器定稿登錄用。回傳 (案件編號, 錯誤訊息)；成功時錯誤訊息是空字串。"""
+    reg = get_registry(get_config())
+    try:
+        return reg.submit(acct, draft, source="計畫產生器"), ""
+    except cr.RegistryError as exc:
+        reg.log_event(acct, "登錄未成功", str(exc), "計畫產生器")
+        return "", str(exc)
+    except Exception as exc:
+        reg.log_event(acct, "登錄失敗", type(exc).__name__, "計畫產生器")
+        return "", f"寫入失敗，案件沒有登錄（{type(exc).__name__}）。請稍後再試或通知管理者。"
+
+
 def _page_password(book, acct):
     if acct.must_change:
         st.warning("您還在使用預設密碼 0000，請更新密碼。")

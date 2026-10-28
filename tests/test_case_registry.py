@@ -60,7 +60,7 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(self.store.rows[2][32], no)          # 第 3 列，不是最後一列
         self.assertEqual(self.store.rows[2][15], "FALSE")     # 勾選方塊沒被洗掉
         self.assertEqual(len(self.store.rows), 7)
-        no2 = self.reg.submit(self.unit, sample())
+        no2 = self.reg.submit(self.unit, sample(plan_name="第二件計畫"))
         self.assertEqual(self.store.rows[3][32], no2)
         self.assertEqual([c.case_no for c in self.reg.cases()], [no, no2])
 
@@ -72,7 +72,7 @@ class RegistryTests(unittest.TestCase):
 
     def test_case_numbers_are_per_battalion_and_sequential(self):
         a = self.reg.submit(self.unit, sample())
-        b = self.reg.submit(self.unit, sample())
+        b = self.reg.submit(self.unit, sample(plan_name="第二件計畫"))
         other = self.reg.submit(acct(cr.ROLE_UNIT, battalion="關山大隊", unit="延平分隊"),
                                 sample(battalion="關山大隊", unit="延平分隊"))
         self.assertEqual((a, b, other), ("115-成-0001", "115-成-0002", "115-關-0001"))
@@ -92,6 +92,15 @@ class RegistryTests(unittest.TestCase):
         no = self.reg.submit(self.unit, sample(unit="別的分隊", battalion="台東大隊"))
         c = self.reg.get(no)
         self.assertEqual((c["unit"], c["battalion"]), ("成功分隊", "成功大隊"))
+
+    def test_same_plan_cannot_be_registered_twice(self):
+        no = self.reg.submit(self.unit, sample())
+        with self.assertRaises(cr.RegistryError) as cm:
+            self.reg.submit(self.unit, sample(plan_name=" " + sample()["plan_name"] + " "))
+        self.assertIn(no, str(cm.exception))
+        self.assertEqual(len(self.reg.cases()), 1)
+        other_unit = acct(cr.ROLE_UNIT, "o", unit="別的分隊")
+        self.reg.submit(other_unit, sample())               # 不同單位同名計畫不算重複
 
     def test_validation(self):
         for bad, text in ((sample(applied=50000), "不能大於"), (sample(plan_name=""), "計畫名稱"),

@@ -599,6 +599,11 @@ class CaseRegistry:
             raise RegistryError("試算表欄位與預期不一致，已停止寫入：" + "；".join(problems[:3]))
         with self._lock:
             cases = self.cases()
+            same = [c for c in cases if c["battalion"] == data["battalion"] and c["unit"] == data["unit"]
+                    and re.sub(r"\s+", "", c["plan_name"]) == re.sub(r"\s+", "", _clean(data["plan_name"]))]
+            if same:
+                raise RegistryError(f"已有相同計畫名稱的案件（{same[0].case_no}），請勿重複登錄；"
+                                    "若被退回請到「處理案件」修正後重新送審。")
             case_no = self.next_case_no(data["battalion"], cases=cases)
             vals = {
                 "timestamp": now_text(), "battalion": data["battalion"], "unit": data["unit"],

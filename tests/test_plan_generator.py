@@ -63,9 +63,9 @@ class AllocationTests(unittest.TestCase):
         self.assertEqual([i["subsidy"] for i in items], [4705, 5490, 1176, 8629])
         self.assertEqual(sum(i["subsidy"] for i in items), 20000)
         self.assertEqual(sum(i["self"] for i in items), 5500)
-        self.assertIn("4,705元由議員建議補助款支應", items[0]["remark"])
-        self.assertIn("1,295元由自籌款支應", items[0]["remark"])
-        self.assertTrue(items[0]["remark"].startswith("用餐；"))
+        self.assertEqual(items[0]["remark"], "用餐")           # 備註只留用途說明，不顯示「○元由…支應」
+        for item in items:
+            self.assertNotIn("支應", item["remark"])
 
     def test_nhi_gets_zero_subsidy_and_others_share_the_total(self):
         items = _items([
@@ -76,8 +76,7 @@ class AllocationTests(unittest.TestCase):
         by_name = {i["name"]: i for i in items}
         self.assertEqual(by_name["補充保費"]["subsidy"], 0)
         self.assertEqual(by_name["補充保費"]["self"], 500)
-        self.assertNotIn("議員建議補助款", by_name["補充保費"]["remark"])
-        self.assertIn("自籌款", by_name["補充保費"]["remark"])
+        self.assertEqual(by_name["補充保費"]["remark"], "補充保費")
         self.assertEqual(by_name["講義"]["subsidy"] + by_name["場地"]["subsidy"], 1000)
         ctx = _ctx(items=[
             {"name": "講義", "kind": "一般", "qty": 10, "price": 100, "use": "上課"},
@@ -149,7 +148,7 @@ class CourseTests(unittest.TestCase):
         self.assertEqual(ws["A2"].value, pg.roc_date(day1))
         self.assertEqual(ws["B2"].value, "08:10－09:00")
         self.assertEqual(ws["C4"].value, "第二天")
-        self.assertIn("4,705元由議員建議補助款支應", wb["經費概算表"]["G3"].value)
+        self.assertEqual(wb["經費概算表"]["G3"].value, "供訓練人員中餐及晚餐")
 
     def test_missing_date_defaults_to_start(self):
         start = pg.earliest_activity_date(TODAY)

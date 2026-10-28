@@ -326,20 +326,9 @@ def prepare_courses(courses, start=None, end=None):
 
 
 def _remark(use, subsidy, self_amt, source_label, source_parts=None):
-    parts = []
-    if source_parts:
-        for label, amount in source_parts:
-            if amount > 0.5:
-                parts.append(f"{money(amount)}元由{label}支應")
-    elif subsidy > 0.5:
-        parts.append(f"{money(subsidy)}元由{source_label}支應")
-    if self_amt > 0.5:
-        parts.append(f"{money(self_amt)}元由自籌款支應")
-    body = "，".join(parts)
-    use = (use or "").strip()
-    if use and body:
-        return f"{use}；{body}"
-    return use or body
+    """概算表備註：只放用途說明。「○元由議員建議補助款支應、○元由自籌款支應」依現行規定不再顯示，
+    各項補助與自籌金額看「補助款分配計算預覽」。"""
+    return (use or "").strip()
 
 
 def _no_subsidy_words(item):
@@ -410,6 +399,7 @@ class PlanContext:
     org_battalion: str = ""   # 登入帳號所屬大隊，陳報單抬頭用
     org_unit: str = ""       # 登入帳號的分隊；大隊帳號留空
     award_basis: str = ""    # amount / days / custom / none；空白＝有填敘獎額度就是 custom，否則不敘獎
+    case_no: str = ""        # 登錄案件管制後取得的案號，會印在計畫書、概算表、陳報單上
 
     # ---- 衍生值
     def __post_init__(self):
@@ -563,7 +553,8 @@ RULE_PERSONAL_GEAR = "常見問答「活動費用用於採購服裝」；設備�
 RULE_EQUIPMENT_KIND = "注意要點「計畫書命名（設備類）」；設備類為購置設備（資本門）"
 PERSONAL_GEAR_WORDS = ("服裝", "制服", "個人裝備", "外套", "T恤", "鞋")
 RULE_NO_SUBSIDY = "縣府核定函：「油資、過路費、停車費」不予補助"
-RULE_MEAL_QTY ="注意要點「便當、活動耗材等合理性說明」；錯誤樣態「概算表數量與用途說明不一致」"
+RULE_MEAL_QTY = ("編列原則「名冊人數需與便當、物品數量合理對應」；工作人員名冊若為 30 人，便當不應無故暴增至 100 多份，"
+                 "需於備註欄清楚註明數量來源與用途")
 ALL_CLEAR_MESSAGE = "計畫符合現行補捐助規定，可以開始匯出"
 
 
@@ -1054,20 +1045,85 @@ def check_plan(ctx, today=None):
                     suggestion="請把課程日期改到活動開始日至結束日之間。",
                 ))
 
-    # 11. 人數與餐點份數（提醒）
-    if ctx.headcount > 0:
-        for i in ctx.items:
-            if i["kind"] == "餐費" and i["unit"] in ("份", "個", "人") and i["qty"] > ctx.headcount * ctx.days * 3:
-                limit = ctx.headcount * ctx.days * 3
-                f.append(_issue(
-                    WARN, f"「{i['name']}」數量偏多",
-                    f"{int(i['qty'])} {i['unit']}，參訓 {ctx.headcount} 人、{ctx.days} 天，請確認是否合理。",
-                    rule=RULE_MEAL_QTY,
-                    where=_budget_where([i["name"]]),
-                    comparison=f"數量 {int(i['qty'])} {i['unit']}，參訓 {ctx.headcount} 人、{ctx.days} 天（超過 {limit}）",
-                    suggestion="請確認份數是否合理，必要時調降數量，並在用途說明寫明數量來源。",
-                ))
+    # 11. 人數與餐點、耗材數量
+    f += _quantity_findings(ctx)
     return f
+
+
+# ---------------------------------------------------------------- 人數與餐點、耗材數量
+def _meals_in(text):
+    """辨識品名或用途說明裡的餐別：午晚餐＝午餐＋晚餐。回傳 (餐數, 說明)。至少算 1 餐。"""
+    t = str(text or "")
+    meals = []
+    if re.search(r"早餐|早點|早飯", t):
+        meals.append("早餐")
+    if re.search(r"午餐|中餐|午飯|午[、及與和]?晚", t):
+        meals.append("午餐")
+    if re.search(r"晚餐|晚飯|午[、及與和]?晚", t):
+        meals.append("晚餐")
+    return max(1, len(meals)), ("＋".join(meals) if meals else "1 餐")
+
+
+def _has_qty_note(use):
+    """用途說明有沒有寫明數量來源：至少要有「○人」這類人數說明。"""
+    return bool(re.search(r"\d+\s*[人名位]", str(use or "")))
+
+
+_MEAL_NAME = re.compile(r"便當|餐盒|午餐|中餐|晚餐|早餐|餐")
+_DRINK_NAME = re.compile(r"礦泉水|飲用水|瓶裝水|茶|飲料|果汁|咖啡|運動飲")
+_GOODS_NAME = re.compile(r"毛巾|帽|袋|資料夾|筆記|文具|識別證|名牌|貼紙|手冊|背心|雨衣")
+_MEAL_UNITS = ("份", "個", "人", "盒", "客", "組")
+_DRINK_UNITS = ("瓶", "罐", "杯")
+_GOODS_UNITS = ("個", "條", "件", "本", "支", "份", "組", "頂", "張", "套", "雙")
+
+
+def _quantity_findings(ctx):
+    """名冊（或參加）人數需與便當、飲品、個人耗材數量合理對應；超過時須在用途說明註明數量來源。"""
+    if ctx.plan_type == "equipment":
+        return []
+    roster_n = len([r for r in ctx.roster if str(r.get("name") or "").strip()])
+    people = roster_n or int(ctx.headcount or 0)
+    if people <= 0:
+        return []
+    basis = f"名冊 {roster_n} 人" if roster_n else f"參加人數 {people} 人"
+    days = ctx.days
+    out, checked = [], 0
+    for i in ctx.items:
+        name, use, unit, qty = i["name"], i["use"], i["unit"], i["qty"]
+        text = f"{name} {use}"
+        meal = False
+        if (i["kind"] == "餐費" or _MEAL_NAME.search(name)) and unit in _MEAL_UNITS:
+            meal = True
+            per, label = _meals_in(text)
+            limit = int(-(-people * days * per * 1.1 // 1))
+            how = f"{basis}、{days} 天、每人每天 {label}"
+        elif _DRINK_NAME.search(name) and unit in _DRINK_UNITS:
+            limit = people * days * 3
+            how = f"{basis}、{days} 天、每人每天最多約 3 {unit}"
+        elif _GOODS_NAME.search(name) and unit in _GOODS_UNITS:
+            limit = int(-(-people * 1.2 // 1))
+            how = f"{basis}、每人 1 {unit}"
+        else:
+            continue
+        checked += 1
+        if qty <= limit:
+            continue
+        where = _budget_where([name])
+        if _has_qty_note(use):
+            out.append(Finding(OK, f"「{name}」數量超過人數基準，已於用途說明註明來源",
+                               f"{int(qty)} {unit}，{how}，合理上限約 {limit}；用途說明：{use}"))
+            continue
+        out.append(_issue(
+            ERROR if meal else WARN, f"「{name}」數量與人數不相符",
+            f"{int(qty)} {unit}，{how}，合理上限約 {limit}。",
+            rule=RULE_MEAL_QTY,
+            where=where,
+            comparison=f"數量 {int(qty)} {unit}，依 {how} 約 {limit}",
+            suggestion="請調降數量，或在「用途說明」清楚註明數量來源與用途，"
+                       "例如：學員 30 人＋工作人員 10 人＋來賓 5 人，午餐及晚餐。"))
+    if checked and not any(f.level != OK for f in out):
+        out.append(Finding(OK, "餐點與耗材數量與人數相符", f"依{basis}檢查，沒有數量明顯偏多的品項。"))
+    return out
 
 
 # ---------------------------------------------------------------- 文字範本
@@ -1493,7 +1549,8 @@ def submission_body(ctx):
 
 
 def submission_markdown(ctx):
-    lines = [f"**{org_title(ctx)} 陳報單**　　{ctx.year}年○月○日　第○○○號", "",
+    lines = ([f"案件編號：{ctx.case_no}", ""] if ctx.case_no else [])
+    lines += [f"**{org_title(ctx)} 陳報單**　　{ctx.year}年○月○日　第○○○號", "",
              f"**案由**：{submission_subject(ctx)}", "", "**陳報內容**：", ""]
     for p in submission_body(ctx):
         lines += [line + "  " for line in p.split("\n")]
@@ -1553,12 +1610,25 @@ def _table(doc, header, rows, widths=None, size=12):
     return t
 
 
+def _case_no_header(doc, ctx):
+    """每一頁右上角印案件編號（登錄後才有）。"""
+    if not ctx.case_no:
+        return
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    for section in doc.sections:
+        p = section.header.paragraphs[0]
+        p.text = ""
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        _set_font(p.add_run(f"案件編號：{ctx.case_no}"), 11, True)
+
+
 def build_docx(ctx):
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Cm
 
     doc = Document()
+    _case_no_header(doc, ctx)
     sec = doc.sections[0]
     sec.left_margin = sec.right_margin = Cm(2.2)
     sec.top_margin = sec.bottom_margin = Cm(2.0)
@@ -1622,6 +1692,7 @@ def build_submission_docx(ctx):
     from docx.shared import Cm
 
     doc = Document()
+    _case_no_header(doc, ctx)
     sec = doc.sections[0]
     sec.left_margin = sec.right_margin = Cm(2.2)
     sec.top_margin = sec.bottom_margin = Cm(2.0)
@@ -1670,6 +1741,8 @@ def build_xlsx(ctx):
     wb = Workbook()
     ws = wb.active
     ws.title = "經費概算表"
+    if ctx.case_no:
+        ws.oddHeader.right.text = f"案件編號：{ctx.case_no}"
     thin = Side(style="thin")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     ws.merge_cells("A1:G1")

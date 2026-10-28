@@ -296,8 +296,8 @@ class MultiSourceAndEquipmentTests(unittest.TestCase):
         self.assertEqual(sum(i["subsidy"] for i in ctx.items), 50000)
         for item in ctx.items:
             self.assertAlmostEqual(sum(a for _l, a in item["by_source"]), item["subsidy"], places=6)
-            self.assertIn("議員建議補助款支應", item["remark"])
-            self.assertIn("卑南鄉公所代表建議補助款支應", item["remark"])
+            self.assertNotIn("支應", item["remark"])             # 備註不顯示各來源金額
+            self.assertNotIn("元由", item["remark"])
         by_label = {}
         for item in ctx.items:
             for label, amount in item["by_source"]:
@@ -476,6 +476,100 @@ class SubmissionFormatTests(unittest.TestCase):
         text = pg.submission_body(ctx)[1]
         self.assertIn(f"新臺幣{pg.to_cn_amount(ctx.total)}元整", text)
         self.assertIn(f"其餘新臺幣{pg.to_cn_amount(ctx.self_fund)}元整", text)
+
+
+class QuantityAndCaseNumberTests(unittest.TestCase):
+    """名冊（參加）人數與便當、飲品、耗材數量要合理對應；案號會印在文件上。"""
+
+    def _ctx(self, items, headcount=30, roster=None, plan_type="training", case="rehab_bls"):
+        data = pg.case_inputs(case, TODAY)
+        data["headcount"] = headcount
+        data["items"] = items
+        ctx = pg.context_from_inputs(data, plan_type)
+        if roster is not None:
+            ctx.roster = roster
+        return ctx
+
+    def _meal(self, qty, use, name="便當"):
+        return [{"name": name, "kind": "餐費", "qty": qty, "unit": "份", "price": 100, "use": use},
+                {"name": "紅布條", "kind": "一般", "qty": 1, "unit": "條", "price": 1000, "use": "背景布條"}]
+
+    def _titles(self, ctx, level):
+        return [f.title for f in pg.check_plan(ctx, today=TODAY) if f.level == level]
+
+    def test_meal_far_above_headcount_is_an_error_without_explanation(self):
+        ctx = self._ctx(self._meal(100, "供訓練人員用餐"), headcount=30)
+        self.assertIn("「便當」數量與人數不相符", self._titles(ctx, pg.ERROR))
+
+    def test_meal_with_quantity_source_in_note_passes(self):
+        ctx = self._ctx(self._meal(100, "學員30人＋工作人員10人＋來賓60人，午餐及晚餐"), headcount=30)
+        self.assertNotIn("「便當」數量與人數不相符", self._titles(ctx, pg.ERROR))
+        self.assertIn("「便當」數量超過人數基準，已於用途說明註明來源", self._titles(ctx, pg.OK))
+
+    def test_lunch_plus_dinner_is_two_meals_per_person(self):
+        for name, use in (("午晚餐便當", "用餐"), ("便當", "供午餐及晚餐"), ("便當", "午、晚餐"), ("便當", "供訓練人員中餐及晚餐")):
+            ctx = self._ctx(self._meal(100, use, name), headcount=50)
+            self.assertNotIn("「%s」數量與人數不相符" % name, self._titles(ctx, pg.ERROR), (name, use))
+        ctx = self._ctx(self._meal(100, "午餐"), headcount=50)               # 只有午餐，100 份就偏多
+        self.assertIn("「便當」數量與人數不相符", self._titles(ctx, pg.ERROR))
+        self.assertEqual(pg._meals_in("午晚餐"), (2, "午餐＋晚餐"))
+        self.assertEqual(pg._meals_in("早餐、午餐及晚餐")[0], 3)
+        self.assertEqual(pg._meals_in("便當")[0], 1)
+
+    def test_roster_count_takes_priority_over_headcount(self):
+        roster = [{"unit": "x", "title": "y", "name": f"人{n}"} for n in range(10)]
+        ctx = self._ctx(self._meal(30, "用餐"), headcount=50, roster=roster)
+        self.assertIn("「便當」數量與人數不相符", self._titles(ctx, pg.ERROR))
+        self.assertIn("名冊 10 人", [f.detail for f in pg.check_plan(ctx, today=TODAY)
+                                   if f.title == "「便當」數量與人數不相符"][0])
+
+    def test_multi_day_scales_the_allowance(self):
+        data = pg.case_inputs("rehab_bls", TODAY)
+        data["start"], data["end"] = date(2026, 12, 11), date(2026, 12, 12)
+        data["headcount"] = 30
+        data["items"] = self._meal(60, "午餐")
+        ctx = pg.context_from_inputs(data, "training")
+        self.assertEqual(ctx.days, 2)
+        self.assertNotIn("「便當」數量與人數不相符", self._titles(ctx, pg.ERROR))
+
+    def test_drinks_and_goods_are_warnings_not_errors(self):
+        items = [{"name": "礦泉水", "kind": "一般", "qty": 300, "unit": "瓶", "price": 10, "use": "飲用"},
+                 {"name": "毛巾", "kind": "一般", "qty": 100, "unit": "條", "price": 30, "use": "發給學員"}]
+        ctx = self._ctx(items, headcount=30)
+        warns = self._titles(ctx, pg.WARN)
+        self.assertIn("「礦泉水」數量與人數不相符", warns)
+        self.assertIn("「毛巾」數量與人數不相符", warns)
+        self.assertNotIn("「礦泉水」數量與人數不相符", self._titles(ctx, pg.ERROR))
+
+    def test_reasonable_quantities_get_an_ok_line(self):
+        ctx = self._ctx(self._meal(30, "供訓練人員午餐"), headcount=30)
+        self.assertIn("餐點與耗材數量與人數相符", self._titles(ctx, pg.OK))
+
+    def test_equipment_is_not_checked(self):
+        ctx = pg.case_context("equip_rescue", TODAY)
+        ctx.headcount = 1
+        self.assertEqual(pg._quantity_findings(ctx), [])
+
+    def test_remark_has_no_source_or_amount_text(self):
+        ctx = pg.case_context("honor", TODAY)
+        for item in ctx.items:
+            self.assertNotIn("元由", item["remark"])
+            self.assertNotIn("支應", item["remark"])
+            self.assertEqual(item["remark"], item["use"].strip())
+
+    def test_case_number_printed_on_all_documents(self):
+        from docx import Document
+        from openpyxl import load_workbook
+        ctx = pg.case_context("honor", TODAY)
+        for build in (pg.build_docx, pg.build_submission_docx):
+            self.assertEqual(Document(io.BytesIO(build(ctx))).sections[0].header.paragraphs[0].text, "")
+        ctx.case_no = "115-成-0001"
+        for build in (pg.build_docx, pg.build_submission_docx):
+            doc = Document(io.BytesIO(build(ctx)))
+            self.assertEqual(doc.sections[0].header.paragraphs[0].text, "案件編號：115-成-0001")
+        wb = load_workbook(io.BytesIO(pg.build_xlsx(ctx)))
+        self.assertEqual(wb.active.oddHeader.right.text, "案件編號：115-成-0001")
+        self.assertIn("案件編號：115-成-0001", pg.submission_markdown(ctx))
 
 
 if __name__ == "__main__":

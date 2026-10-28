@@ -1492,6 +1492,49 @@ def _apply_plan_preset(ver, preset, plan_type="training"):
     st.session_state["plan_awards"] = pd.DataFrame(awards, columns=["職務", "人數", "種類", "次數"])
     st.session_state[f"plan_meet_{ver}"] = meet
     st.session_state["plan_courses"] = pd.DataFrame(courses)
+    st.session_state["plan_roster_base"] = pd.DataFrame([{"單位": "", "職稱": "", "姓名": ""}])
+
+
+# 切到別的分頁再切回來時，Streamlit 會丟掉沒有顯示的欄位內容。這裡每次畫完表單就把內容備份一份，
+# 回到產生器發現欄位被丟掉時再還原，避免同仁填到一半切去看別的頁就全部消失。
+_PLAN_BUTTON_PREFIXES = ("plan_load_", "plan_clear", "plan_register_", "plan_item_del_", "plan_item_add_")
+_PLAN_STATE_KEYS = {"plan_keep", "plan_ver", "plan_started", "plan_type_applied", "plan_items", "plan_sources",
+                    "plan_courses", "plan_awards", "plan_item_rev", "plan_edit_rev", "plan_roster_base"}
+
+
+def _snapshot_generator_state(ver, frames):
+    import datetime as _dt
+    widgets = {}
+    for k, v in st.session_state.items():
+        if not isinstance(k, str) or not k.startswith("plan_") or k in _PLAN_STATE_KEYS:
+            continue
+        if "editor" in k or k.startswith(_PLAN_BUTTON_PREFIXES):
+            continue
+        if not (k.endswith(f"_{ver}") or k in ("plan_type_sel", "plan_case_sel")):
+            continue
+        if isinstance(v, (str, int, float, bool, list, _dt.date, type(None))):
+            widgets[k] = v
+    st.session_state["plan_keep"] = {"ver": ver, "widgets": widgets,
+                                     "frames": {k: df.copy() for k, df in frames.items()}}
+
+
+def _restore_generator_state():
+    keep = st.session_state.get("plan_keep")
+    ver = st.session_state.get("plan_ver")
+    if not keep or ver is None or keep.get("ver") != ver or not st.session_state.get("plan_started"):
+        return
+    if f"plan_unit_{ver}" in st.session_state:        # 表單還在，不用還原
+        return
+    for k, v in keep["widgets"].items():
+        st.session_state[k] = v
+    for k, df in keep["frames"].items():
+        st.session_state[k] = df.copy()
+    st.session_state["plan_edit_rev"] = st.session_state.get("plan_edit_rev", 0) + 1
+
+
+def render_plan_generator_page():
+    _restore_generator_state()
+    _render_plan_generator_inner()
 
 
 def _default_squad_name(acct):
@@ -1509,7 +1552,7 @@ def _step_heading(text):
                 unsafe_allow_html=True)
 
 
-def render_plan_generator_page():
+def _render_plan_generator_inner():
     """✏️ 計畫書產生器：選計畫類型、填必要資料，產出計畫書（Word）與概算表（Excel）草稿。
 
     先套用申請階段的規則檢查。輸入只留在目前瀏覽器分頁的記憶體中，不寫入資料庫、不上傳。
@@ -1594,6 +1637,7 @@ def render_plan_generator_page():
             st.session_state["plan_started"] = True
             st.rerun()
     ver = st.session_state["plan_ver"]
+    er = st.session_state.get("plan_edit_rev", 0)
     if not st.session_state.get("plan_started"):
         st.info("👆 請先按上面的「載入案例」或「清空重填」，接下來的填寫欄位才會出現。")
         return
@@ -1635,7 +1679,7 @@ def render_plan_generator_page():
             date_bounds = {"min_value": d_start, "max_value": d_end}
         courses_df = st.data_editor(
             st.session_state["plan_courses"], num_rows="dynamic", use_container_width=True,
-            key=f"plan_course_editor_{ver}",
+            key=f"plan_course_editor_{ver}_{er}",
             column_config={
                 "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD", **date_bounds),
                 "時間": st.column_config.TextColumn("時間", help="例：09:10－12:00"),
@@ -1647,7 +1691,7 @@ def render_plan_generator_page():
     st.caption("類型選「議員」是議員建議、縣府補助；選「代表」是鄉鎮市公所代表建議、公所補助，並填公所名稱。"
                "姓名可填多位（用「、」分開，不必加職稱）。每筆各填金額，補助總額為各筆加總。")
     sources_df = st.data_editor(
-        st.session_state["plan_sources"], num_rows="dynamic", use_container_width=True, key=f"plan_src_editor_{ver}",
+        st.session_state["plan_sources"], num_rows="dynamic", use_container_width=True, key=f"plan_src_editor_{ver}_{er}",
         column_config={
             "類型": st.column_config.SelectboxColumn("類型", options=["議員", "代表"], required=True),
             "姓名": st.column_config.TextColumn("姓名", help="例：王、李（空白會填「ＯＯ議員」或「ＯＯ代表」）"),
@@ -1665,13 +1709,14 @@ def render_plan_generator_page():
     st.caption("這張表是完整的概算表：所有品項（含自籌款支應的）都填在這裡。補助款只是依各項金額比例分配到各項，"
                "其餘為自籌款，分配結果在下方「補助款分配計算預覽」。"
                "二代健保補充保費，以及品項名稱含「油資」「過路費」「停車費」的項目，縣府不予補助，不分配補助款、全數自籌。"
-               "備註（用途＋經費來源）由系統自動產生。")
+               "備註欄只放「用途說明」，不顯示補助款或自籌款金額；"
+               "便當、飲品、耗材的數量如果超過人數所需，請在用途說明寫明數量來源（例：學員 30 人＋工作人員 10 人，午餐及晚餐）。")
     item_rev = st.session_state.get("plan_item_rev", 0)
     base_items = st.session_state["plan_items"].copy()
     if "刪除" not in base_items.columns:
         base_items.insert(0, "刪除", False)
     items_df = st.data_editor(
-        base_items, num_rows="dynamic", use_container_width=True, key=f"plan_item_editor_{ver}_{item_rev}",
+        base_items, num_rows="dynamic", use_container_width=True, key=f"plan_item_editor_{ver}_{item_rev}_{er}",
         column_config={
             "刪除": st.column_config.CheckboxColumn("刪除", help="勾選後按下方「刪除勾選列」；勾選的列不計入下面的合計"),
             "類別": st.column_config.SelectboxColumn("類別", options=pg.ITEM_KINDS, required=True),
@@ -1747,8 +1792,9 @@ def render_plan_generator_page():
         else:
             st.caption("參加人員名冊（選填；輸入後才會產出名冊附件。名冊含個資，僅在本頁暫時使用）" if is_activity
                        else "參訓名冊（選填；輸入後才會產出附件三。名冊含個資，僅在本頁暫時使用）")
-            roster_df = st.data_editor(pd.DataFrame([{"單位": "", "職稱": "", "姓名": ""}]), num_rows="dynamic",
-                                       use_container_width=True, key=f"plan_roster_{ver}")
+            roster_df = st.data_editor(
+                st.session_state.get("plan_roster_base", pd.DataFrame([{"單位": "", "職稱": "", "姓名": ""}])),
+                num_rows="dynamic", use_container_width=True, key=f"plan_roster_{ver}_{er}")
 
     with st.expander("陳報單設定：獎懲（第四點）、敬會單位", expanded=True):
         st.caption("獎懲只寫在陳報單，不寫進計畫書。依「消防專業人員平時考核獎懲標準」："
@@ -1759,7 +1805,7 @@ def render_plan_generator_page():
         if award_basis == "custom":
             awards_df = st.data_editor(
                 st.session_state["plan_awards"], num_rows="dynamic", use_container_width=True,
-                key=f"plan_award_editor_{ver}",
+                key=f"plan_award_editor_{ver}_{er}",
                 column_config={
                     "種類": st.column_config.SelectboxColumn("種類", options=list(pg.AWARD_KINDS), required=True),
                     "人數": st.column_config.NumberColumn("人數", step=1, format="%d"),
@@ -1791,8 +1837,15 @@ def render_plan_generator_page():
         awards=[{"role": r.get("職務"), "count": r.get("人數"), "kind": r.get("種類"), "times": r.get("次數")}
                 for r in awards_df.to_dict("records")],
         meet=meet, award_basis=award_basis,
+        case_no=(st.session_state.get(f"plan_regd_{ver}") or {}).get("case_no", ""),
         org_battalion=acct.battalion if acct is not None else "",
         org_unit=acct.unit if (acct is not None and acct.role == "unit") else "")
+    _snapshot_generator_state(ver, {
+        "plan_items": items_df_eff.drop(columns=["刪除"], errors="ignore").reset_index(drop=True),
+        "plan_sources": sources_df.reset_index(drop=True),
+        "plan_courses": courses_df.reset_index(drop=True),
+        "plan_awards": awards_df.reset_index(drop=True),
+        "plan_roster_base": roster_df.reset_index(drop=True)})
     with award_box:
         _award = pg.award_text(ctx)
         if award_basis == "none":
@@ -1860,15 +1913,47 @@ def render_plan_generator_page():
                 st.markdown(line)
 
     ready = bool(unit.strip() and name.strip() and items)
+    can_register = ready and not errors
     if case_pages.is_enabled():
-        if ready and not errors:
+        if can_register:
             st.session_state["case_handoff"] = case_registry.draft_from_plan(ctx)
-            st.success("📮 檢核沒有錯誤，可以到上方「📮 案件登錄」登錄這份計畫，資料會自動帶入。")
         else:
             st.session_state.pop("case_handoff", None)
     if not ready:
         st.info("請先填入申請單位、活動名稱與至少一個概算項目，才能產出草稿。")
         return
+    if enabled:
+        step("定稿並登錄案件，取得案號")
+        draft = case_registry.draft_from_plan(ctx)
+        sig = [str(draft[k]) for k in ("plan_name", "total", "applied", "source_detail", "date_start", "date_end")]
+        regd = st.session_state.get(f"plan_regd_{ver}")
+        if regd:
+            st.success("✅ 已登錄到案件管制系統，大隊與業務科可以開始審核。")
+            st.markdown(f'<div style="font-size:2rem; font-weight:800; color:#dc2626;">案件編號：{regd["case_no"]}</div>',
+                        unsafe_allow_html=True)
+            st.caption("請把案號寫在紙本計畫與陳報單上。下面下載的計畫書、概算表、陳報單，每頁右上角已自動印上案號。")
+            if regd["sig"] != sig:
+                st.warning("登錄之後您又修改了計畫名稱、金額、日期或補助來源，和已登錄的案件資料不一致。"
+                           "案件管制系統裡的資料不會跟著改，請先確認是否要重新登錄或通知大隊。")
+        elif acct is None or acct.role not in ("unit", "battalion"):
+            st.caption("科室帳號不能登錄新案件，請用分隊或大隊帳號登入。")
+        elif not can_register:
+            st.info("規定檢查還有紅字錯誤，修正到沒有紅字之後，才能定稿登錄。")
+        else:
+            st.caption("檢查沒有錯誤了。確認內容無誤後定稿：系統會寫進案件管制、產生案件編號，之後大隊與業務科在系統上審核。"
+                       "登錄後再修改的內容不會同步到管制系統，所以請先確認好再按。")
+            officer = st.text_input("承辦人姓名 *", key=f"plan_officer_{ver}")
+            if st.button("✅ 定稿並登錄案件", type="primary", key=f"plan_register_{ver}"):
+                if not officer.strip():
+                    st.error("請填寫承辦人姓名")
+                else:
+                    case_no, err = case_pages.submit_draft(acct, dict(draft, officer=officer.strip()))
+                    if err:
+                        st.error(err)
+                    else:
+                        st.session_state[f"plan_regd_{ver}"] = {"case_no": case_no, "sig": sig}
+                        st.session_state.pop("case_handoff", None)
+                        st.rerun()
     step("預覽與下載")
     with st.expander("展開計畫書預覽", expanded=True):
         st.markdown(pg.markdown_preview(ctx))

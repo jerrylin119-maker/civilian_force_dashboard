@@ -163,7 +163,7 @@ class DeptRuleTests(unittest.TestCase):
         self.assertFalse(self.reg.is_mine(self.bn, c))
         self.assertTrue(self.reg.is_mine(self.civil, c))
         other_unit = self.book.authenticate("東河分隊", "0000")
-        no2 = self.reg.submit(self.unit, sample())
+        no2 = self.reg.submit(self.unit, dict(sample(), plan_name="第二件計畫"))
         self.reg.update_stage(self.bn, no2, "first_review", {"first_result": "退回分隊修正"})
         self.assertTrue(self.reg.is_mine(self.unit, self.reg.get(no2)))
         self.assertFalse(self.reg.is_mine(other_unit, self.reg.get(no2)))
