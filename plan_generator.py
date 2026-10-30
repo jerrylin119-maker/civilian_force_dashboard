@@ -7,7 +7,7 @@
 - 輸出 Word 計畫書（.docx）與 Excel 概算表（.xlsx，合計用公式）。
 - 純函式、不依賴 Streamlit，也不儲存任何輸入資料。
 
-目前有三種計畫類型：專業訓練活動、活動類（表揚／研習／文康）、設備類（購置設備）。
+目前有三種計畫類型：訓練類（專業訓練活動）、活動類（表揚／研習／文康）、設備類（購置設備）。
 經費來源可有多筆：議員（建議縣府補助）、鄉鎮市公所代表（建議公所補助），各自列金額，加總為補助總額。
 要新增類型時，在 PLAN_TYPES 加一筆（含畫面欄位名稱），並在 sections() 提供對應的章節範本即可。
 活動類的歷史去識別化範例放在 plan_cases.py。
@@ -26,11 +26,11 @@ from subsidy_check import (
 
 # app.py 用這個數字判斷記憶體裡的模組是不是舊版。Streamlit Cloud 重新部署時
 # 常常只重跑 app.py，sys.modules 仍留著上一版 plan_generator。
-MODULE_REVISION = 10
+MODULE_REVISION = 11
 
 PLAN_TYPES = {
     "training": {
-        "label": "專業訓練活動（議員建議補助款）",
+        "label": "訓練類（專業訓練活動）",
         "desc": "義消／分隊辦理的專業訓練、研習活動（救災、救護、宣導、環境教育等），經費來源為議員建議補助款加自籌款。",
         "source_label": "議員建議補助款",
         "kind_word": "訓練",
@@ -541,7 +541,8 @@ RULE_AWARD = "注意要點「計畫書內容：課程表與敘獎」；錯誤樣
 RULE_COURSE = "注意要點「計畫書內容：課程表與敘獎」；錯誤樣態「研習、訓練、環境教育活動未附課程表」"
 RULE_RATIO = "注意要點「經費比例上限（自籌款、餐費紀念品、雜支）」"
 RULE_SELF_FUND = RULE_RATIO + "；錯誤樣態「自籌款未達總經費 30%」"
-RULE_MEAL = RULE_RATIO + "；錯誤樣態「餐費及紀念品超過申請補助金額 50%（或未分來源計算）」"
+RULE_MEAL = (RULE_RATIO + "；錯誤樣態「餐費及紀念品超過申請補助金額 50%（或未分來源計算）」。"
+             "報計畫階段不指定哪些品項用補助款，先以總經費 50% 控管（補助款依比例分攤，等同補助金額 50%）")
 RULE_DEADLINE = "注意要點「申請流程與發文單位」；錯誤樣態「活動類案件未於活動 1 個月前送達局本部」"
 RULE_NHI = "注意要點「二代健保補充保費與概算表備註欄」；錯誤樣態「二代健保補充保費用補助款支應」"
 RULE_REMARK = "注意要點「二代健保補充保費與概算表備註欄」；錯誤樣態「概算表備註欄位不清楚」"
@@ -847,32 +848,35 @@ def check_plan(ctx, today=None):
     else:
         f.append(Finding(OK, "補助未超過 2 萬元，不適用 30% 自籌規定", ""))
 
-    # 6. 餐費＋紀念品 ≤ 50%
+    # 6. 餐費＋宣導品＋紀念品 ≤ 總經費 50%
+    #    規定是「補助款支應的餐費、紀念品不超過補助金額 50%」。報計畫時不指定哪些品項用補助款（補助款依各項金額
+    #    比例分攤），所以先用總經費 50% 控管：合計不超過總經費一半，補助款支應的部分就一定不超過補助金額一半。
     meal_items = [i for i in ctx.items if i["kind"] in MEAL_KINDS]
-    meal = sum(i["subsidy"] for i in meal_items)
-    if sub > 0 and ctx.plan_type != "equipment":
-        cap = sub * MEAL_SOUVENIR_RATIO
+    used = sum(i["total"] for i in meal_items)
+    if total > 0 and ctx.plan_type != "equipment":
+        cap = total * MEAL_SOUVENIR_RATIO
+        excess = max(2 * used - total, 0)
         meal_where = _budget_where([i["name"] for i in meal_items]) if meal_items else "經費概算表"
-        if meal > cap + 0.5:
+        if used > cap + 0.5:
             f.append(_issue(
-                ERROR, "餐費及紀念品超過補助金額 50%",
-                f"補助款支應 {money(meal)} 元，上限 {money(cap)} 元。",
+                ERROR, "餐費、宣導品及紀念品超過總經費 50%",
+                f"合計 {money(used)} 元，上限 {money(cap)} 元（總經費 {money(total)} 元的 50%）。",
                 rule=RULE_MEAL,
                 where=meal_where,
-                comparison=f"補助款支應 {money(meal)} 元，上限 {money(cap)} 元（補助金額的 50%），已超過 {money(meal - cap)} 元",
-                suggestion="請調降餐費或紀念品，或改由自籌款支應，使補助款支應不高於上限。",
+                comparison=f"餐費、宣導品、紀念品合計 {money(used)} 元，上限 {money(cap)} 元（總經費的 50%），已超過 {money(used - cap)} 元",
+                suggestion=f"請調降餐費、宣導品、紀念品至少 {money(excess)} 元，或增加其他項目的經費。",
             ))
-        elif cap and meal > cap * 0.9:
+        elif cap and used > cap * 0.9:
             f.append(_issue(
-                WARN, "餐費及紀念品已接近 50% 上限",
-                f"補助款支應 {money(meal)} 元／上限 {money(cap)} 元，核銷時單據稍有變動就可能超過，建議預留空間。",
+                WARN, "餐費、宣導品及紀念品已接近總經費 50% 上限",
+                f"合計 {money(used)} 元／上限 {money(cap)} 元，核銷時單據稍有變動就可能超過，建議預留空間。",
                 rule=RULE_MEAL,
                 where=meal_where,
-                comparison=f"補助款支應 {money(meal)} 元，上限 {money(cap)} 元（已超過上限的 90%）",
-                suggestion="建議再調降一些餐費或紀念品，預留核銷時單據變動的空間。",
+                comparison=f"合計 {money(used)} 元，上限 {money(cap)} 元（已超過上限的 90%）",
+                suggestion="建議再調降一些餐費、宣導品或紀念品，預留核銷時單據變動的空間。",
             ))
         else:
-            f.append(Finding(OK, "餐費及紀念品未超過補助金額 50%", f"補助款支應 {money(meal)} 元／上限 {money(cap)} 元。"))
+            f.append(Finding(OK, "餐費、宣導品及紀念品未超過總經費 50%", f"合計 {money(used)} 元／上限 {money(cap)} 元。"))
 
     # 7. 雜支 5%
     misc_items = [i for i in ctx.items if i["kind"] == "雜支"]
@@ -1052,6 +1056,7 @@ def check_plan(ctx, today=None):
 
 # ---------------------------------------------------------------- 餐費列（便當、便餐）與用途說明下拉
 MEAL_NAMES = ("便當", "便餐")
+GIFT_NAMES = ("宣導品", "紀念品")      # 宣導品、紀念品與餐費合計受補助金額 50% 上限限制
 MEAL_DEFAULT_UNIT = {"便當": "份", "便餐": "桌"}
 
 
@@ -1082,8 +1087,18 @@ def normalize_meal_rows(rows, start=None, end=None):
     for r in rows:
         r = dict(r)
         r["數量說明"] = str(r.get("數量說明") or "").strip()
+        r["內容"] = str(r.get("內容") or "").strip()
         qty = r.get("數量")
         blank = not str(r.get("項目") or "").strip() and not (isinstance(qty, (int, float)) and qty)
+        if str(r.get("類別") or "") == "紀念品" and not blank:
+            orig = str(r.get("項目") or "").strip()
+            if orig not in GIFT_NAMES:
+                r["項目"] = "宣導品" if "宣導" in orig else "紀念品"
+                r["內容"] = r["內容"] or orig
+            if not str(r.get("單位") or "").strip():
+                r["單位"] = "個"
+            out.append(r)
+            continue
         if str(r.get("類別") or "") != "餐費" or blank:
             out.append(r)
             continue
@@ -1102,6 +1117,22 @@ def normalize_meal_rows(rows, start=None, end=None):
             r["用途說明"] = f"{day}{kind}" if day else kind
         out.append(r)
     return out
+
+
+def meal_gift_summary(ctx):
+    """餐費＋宣導品／紀念品的上限（總經費的 50%）與目前編列，給畫面上方的提示用。
+
+    再加 x 元餐費或宣導品後，總經費也會增加 x，所以還能再加的金額是 總經費 − 2×已編列（不是上限差額）。"""
+    items = [i for i in ctx.items if i["kind"] in MEAL_KINDS]
+    meal_total = sum(i["total"] for i in items if i["kind"] == "餐費")
+    gift_total = sum(i["total"] for i in items if i["kind"] == "紀念品")
+    used = meal_total + gift_total
+    total = ctx.total
+    cap = total * MEAL_SOUVENIR_RATIO
+    return {"total": total, "cap": cap, "meal_total": meal_total, "gift_total": gift_total, "used": used,
+            "remaining": cap - used, "headroom": max(total - 2 * used, 0), "excess": max(2 * used - total, 0),
+            "subsidy": ctx.subsidy,
+            "paid": sum(i["subsidy"] for i in items)}
 
 
 # ---------------------------------------------------------------- 人數與餐點、耗材數量

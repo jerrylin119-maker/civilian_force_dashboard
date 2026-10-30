@@ -24,7 +24,7 @@ if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get
 
 # 與上面同一個原因：重新部署後 sys.modules 裡的 plan_generator 可能還是舊版，
 # normalize_items 沒有 subsidy 參數，計畫書產生器一載入就 TypeError。
-_PLAN_GENERATOR_REVISION = 10
+_PLAN_GENERATOR_REVISION = 11
 
 
 def load_plan_generator():
@@ -1474,6 +1474,7 @@ def _apply_plan_preset(ver, preset, plan_type="training"):
     st.session_state[f"plan_name_{ver}"] = name
     st.session_state[f"plan_year_{ver}"] = int(year)
     st.session_state[f"plan_start_{ver}"] = start
+    st.session_state[f"plan_prev_start_{ver}"] = start
     st.session_state[f"plan_end_{ver}"] = end
     st.session_state[f"plan_place_{ver}"] = place
     st.session_state[f"plan_aud_{ver}"] = audience
@@ -1536,6 +1537,49 @@ def _restore_generator_state():
 def render_plan_generator_page():
     _restore_generator_state()
     _render_plan_generator_inner()
+
+
+def _shift_roc_dates(text, delta):
+    """把文字裡的「115年12月12日」整串往後（前）移 delta 天。"""
+    import re as _re
+    from datetime import date as _date
+
+    def one(m):
+        try:
+            d = _date(int(m.group(1)) + 1911, int(m.group(2)), int(m.group(3))) + delta
+        except ValueError:
+            return m.group(0)
+        return f"{d.year - 1911}年{d.month}月{d.day}日"
+
+    return _re.sub(r"(\d{2,3})年(\d{1,2})月(\d{1,2})日", one, str(text or ""))
+
+
+def _on_plan_start_change(ver):
+    """改開始日期：結束日期、課程表日期、餐費用途說明裡的日期整段一起平移。
+    原本沒有日期（空白表單）就讓結束日期等於開始日期。"""
+    sk, ek, pk = f"plan_start_{ver}", f"plan_end_{ver}", f"plan_prev_start_{ver}"
+    new, old, end = st.session_state.get(sk), st.session_state.get(pk), st.session_state.get(ek)
+    if not new:
+        return
+    if old and end and end >= old:
+        delta = new - old
+        st.session_state[ek] = end + delta
+    else:
+        delta = None
+        st.session_state[ek] = new
+    st.session_state[pk] = new
+    keep = st.session_state.get("plan_keep")
+    if delta and delta.days and keep and keep.get("ver") == ver:
+        courses = keep["frames"]["plan_courses"].copy()
+        if "日期" in courses.columns:
+            courses["日期"] = [d + delta if hasattr(d, "year") else d for d in courses["日期"]]
+        items = keep["frames"]["plan_items"].copy()
+        for col in ("用途說明", "數量說明", "內容"):
+            if col in items.columns:
+                items[col] = [_shift_roc_dates(v, delta) for v in items[col]]
+        st.session_state["plan_courses"] = courses
+        st.session_state["plan_items"] = items
+        st.session_state["plan_edit_rev"] = st.session_state.get("plan_edit_rev", 0) + 1
 
 
 def _default_squad_name(acct):
@@ -1605,38 +1649,29 @@ def _render_plan_generator_inner():
         st.session_state["plan_started"] = False       # 換類型要重新選「載入案例」或「清空重填」
 
     step("載入歷史案例，或清空重填")
-    st.caption("選一個和你案件最像的歷史案例，按「載入案例」後再依實際情形修改；也可以按「清空重填」從空白開始。"
-               "按了其中一個，下面的填寫欄位才會出現。")
-    c1, c2, _ = st.columns([1.3, 1.3, 4])
-    with c1:
-        if plan_type == "training" and st.button("📝 載入範例", use_container_width=True, key="plan_load_sample"):
-            new_ver = st.session_state["plan_ver"] + 1
-            _apply_plan_preset(new_ver, "sample", plan_type)
-            st.session_state["plan_ver"] = new_ver
-            st.session_state["plan_started"] = True
-            st.rerun()
-    with c2:
-        if st.button("🗑️ 清空重填", use_container_width=True, key="plan_clear"):
-            new_ver = st.session_state["plan_ver"] + 1
-            _apply_plan_preset(new_ver, "blank", plan_type)
-            st.session_state["plan_ver"] = new_ver
-            st.session_state["plan_started"] = True
-            st.rerun()
+    st.caption("先在下面選一個和你案件最像的歷史案例（已去識別化），按「載入案例」後再依實際情形修改；"
+               "也可以按「清空重填」從空白開始。按了其中一個，後面的填寫欄位才會出現。")
     cases = pg.case_list(plan_type)
+    case_key = None
     if cases:
-        k1, k2 = st.columns([4, 1.3])
         labels = {key: label for key, label, _s in cases}
-        case_key = k1.selectbox("歷史案例（已去識別化，載入後再依實際情形修改）", [key for key, _l, _s in cases],
+        case_key = st.selectbox("歷史案例", [key for key, _l, _s in cases],
                                 format_func=lambda k: labels[k], key="plan_case_sel")
-        k1.caption(next(s for key, _l, s in cases if key == case_key)
+        st.caption(next(s for key, _l, s in cases if key == case_key)
                    + " 載入後日期改為今天起 45 天，補助款依各項金額比例重新分配。")
-        k2.markdown("<div style='height:1.9rem'></div>", unsafe_allow_html=True)
-        if k2.button("📚 載入案例", use_container_width=True, key="plan_load_case"):
-            new_ver = st.session_state["plan_ver"] + 1
-            _apply_plan_preset(new_ver, f"case:{case_key}", plan_type)
-            st.session_state["plan_ver"] = new_ver
-            st.session_state["plan_started"] = True
-            st.rerun()
+    c1, c2, _ = st.columns([1.3, 1.3, 4])
+    if c1.button("📚 載入案例", use_container_width=True, disabled=case_key is None, key="plan_load_case"):
+        new_ver = st.session_state["plan_ver"] + 1
+        _apply_plan_preset(new_ver, f"case:{case_key}", plan_type)
+        st.session_state["plan_ver"] = new_ver
+        st.session_state["plan_started"] = True
+        st.rerun()
+    if c2.button("🗑️ 清空重填", use_container_width=True, key="plan_clear"):
+        new_ver = st.session_state["plan_ver"] + 1
+        _apply_plan_preset(new_ver, "blank", plan_type)
+        st.session_state["plan_ver"] = new_ver
+        st.session_state["plan_started"] = True
+        st.rerun()
     ver = st.session_state["plan_ver"]
     er = st.session_state.get("plan_edit_rev", 0)
     if not st.session_state.get("plan_started"):
@@ -1654,7 +1689,7 @@ def _render_plan_generator_inner():
         d_start = d_end
         place = b3.text_input("設置地點 *", placeholder="例：臺東分隊", key=f"plan_place_{ver}")
     else:
-        d_start = b1.date_input("開始日期 *", key=f"plan_start_{ver}")
+        d_start = b1.date_input("開始日期 *", key=f"plan_start_{ver}", on_change=_on_plan_start_change, args=(ver,))
         d_end = b2.date_input("結束日期 *", key=f"plan_end_{ver}")
         place = b3.text_input("地點 *", placeholder="例：達仁分隊訓練廣場", key=f"plan_place_{ver}")
     d1, d2 = st.columns([3, 1])
@@ -1707,25 +1742,33 @@ def _render_plan_generator_inner():
     councilors = "、".join(sc["names"] for sc in src_list if sc["kind"] == "councilor" and sc["names"])
     st.metric("補助款合計（各補助來源加總）", f"{subsidy:,.0f} 元")
     st.markdown("**經費概算表（全部項目）**")
-    st.caption("這張表是完整的概算表：所有品項（含自籌款支應的）都填在這裡，分成「餐費」和「其他項目」兩張表。"
+    st.caption("這張表是完整的概算表：所有品項（含自籌款支應的）都填在這裡，分成「餐費」「宣導品、紀念品」「其他項目」三張表。"
                "補助款只是依各項金額比例分配到各項，其餘為自籌款，分配結果在下方「補助款分配計算預覽」。"
                "二代健保補充保費，以及品項名稱含「油資」「過路費」「停車費」的項目，縣府不予補助，不分配補助款、全數自籌。"
                "備註欄只放「用途說明」，不顯示補助款或自籌款金額。")
     item_rev = st.session_state.get("plan_item_rev", 0)
     base_all = st.session_state["plan_items"].copy()
-    if "數量說明" not in base_all.columns:
-        base_all["數量說明"] = ""
+    for col in ("數量說明", "內容"):
+        if col not in base_all.columns:
+            base_all[col] = ""
     if "刪除" in base_all.columns:
         base_all = base_all.drop(columns=["刪除"])
-    is_meal_row = (base_all["類別"].astype(str) == "餐費") & (not is_equip)
+    kind_s = base_all["類別"].astype(str)
+    is_meal_row = (kind_s == "餐費") & (not is_equip)
+    is_gift_row = (kind_s == "紀念品") & (not is_equip)
     meal_base = base_all[is_meal_row].reset_index(drop=True)
-    other_base = base_all[~is_meal_row].reset_index(drop=True)
+    gift_base = base_all[is_gift_row].reset_index(drop=True)
+    other_base = base_all[~(is_meal_row | is_gift_row)].reset_index(drop=True)
     del_help = "勾選後按下方「刪除勾選列」；勾選的列不計入下面的合計"
+    cap_box = None
 
     if is_equip:
         meal_eff = other_base.iloc[0:0].copy()
+        gift_eff = other_base.iloc[0:0].copy()
         marked_m = pd.Series([], dtype=bool)
+        marked_g = pd.Series([], dtype=bool)
     else:
+        cap_box = st.container()          # 上限與目前編列：等下面算完再填
         meal_opts = pg.meal_use_options(d_start, d_end)
         st.markdown("**① 餐費**（便當、便餐）")
         st.caption("類別固定是餐費，項目只能選「便當」或「便餐」，用途說明只能選計畫期間的中餐或晚餐。"
@@ -1760,10 +1803,33 @@ def _render_plan_generator_inner():
             st.warning("有餐費的用途說明不在目前計畫日期的選項內（可能改過日期）：" + "、".join(dict.fromkeys(stale))
                        + "。請重新選擇。")
 
-    st.markdown("**② 其他項目**" if not is_equip else "**購置項目**")
+        st.markdown("**② 宣導品、紀念品**")
+        st.caption("宣導品、紀念品和餐費合計，補助款支應不能超過補助金額的 50%（看上方的上限提示）。"
+                   "項目選「宣導品」或「紀念品」，在「內容」寫是什麼東西（例：環保餐具組），概算表會顯示成「宣導品（環保餐具組）」。"
+                   "不可用「贈品」；有獎徵答才用「獎品」，請列在其他項目。")
+        gift_in = gift_base.copy()
+        gift_in.insert(0, "刪除", False)
+        gift_df = st.data_editor(
+            gift_in, num_rows="dynamic", use_container_width=True,
+            key=f"plan_gift_editor_{ver}_{item_rev}_{er}",
+            column_order=("刪除", "類別", "項目", "內容", "數量", "單位", "單價", "用途說明"),
+            column_config={
+                "刪除": st.column_config.CheckboxColumn("刪除", help=del_help),
+                "類別": st.column_config.SelectboxColumn("類別", options=["紀念品"], default="紀念品", required=True),
+                "項目": st.column_config.SelectboxColumn("項目", options=list(pg.GIFT_NAMES), default="宣導品", required=True),
+                "內容": st.column_config.TextColumn("內容", help="是什麼東西，例：環保餐具組、活動紀念毛巾"),
+                "數量": st.column_config.NumberColumn("數量", step=1, format="%d"),
+                "單價": st.column_config.NumberColumn("單價", step=10, format="%d"),
+            },
+        )
+        marked_g = gift_df["刪除"].fillna(False).astype(bool)
+        gift_eff = gift_df[~marked_g].copy()
+        gift_eff["類別"] = "紀念品"
+
+    st.markdown("**③ 其他項目**" if not is_equip else "**購置項目**")
     other_in = other_base.copy()
     other_in.insert(0, "刪除", False)
-    other_kinds = [k for k in pg.ITEM_KINDS if k != "餐費"]
+    other_kinds = [k for k in pg.ITEM_KINDS if k not in ("餐費", "紀念品")] if not is_equip else list(pg.ITEM_KINDS)
     other_df = st.data_editor(
         other_in, num_rows="dynamic", use_container_width=True,
         key=f"plan_item_editor_{ver}_{item_rev}_{er}",
@@ -1778,12 +1844,25 @@ def _render_plan_generator_inner():
     )
     marked_o = other_df["刪除"].fillna(False).astype(bool)
     other_eff = other_df[~marked_o].copy()
-    items_df_eff = pd.concat([meal_eff, other_eff], ignore_index=True)
-    items_df_eff["數量說明"] = items_df_eff["數量說明"].fillna("")
+    for frame in (meal_eff, gift_eff, other_eff):
+        for col in ("數量說明", "內容"):
+            if col not in frame.columns:
+                frame[col] = ""
+    items_df_eff = pd.concat([meal_eff, gift_eff, other_eff], ignore_index=True)
+    for col in ("數量說明", "內容"):
+        items_df_eff[col] = items_df_eff[col].fillna("")
     items_df_eff["用途合併"] = [
         pg.merge_meal_use(u, n) if k == "餐費" else str(u or "")
         for u, n, k in zip(items_df_eff["用途說明"].fillna(""), items_df_eff["數量說明"], items_df_eff["類別"])]
-    marked = pd.concat([marked_m, marked_o], ignore_index=True)
+    items_df_eff["品名輸出"] = [
+        (f"{p}（{c}）" if (k == "紀念品" and str(c).strip()) else p)
+        for p, c, k in zip(items_df_eff["項目"].fillna(""), items_df_eff["內容"], items_df_eff["類別"])]
+    # 只有預設值、沒填數量金額與說明的空列不算項目
+    _q = pd.to_numeric(items_df_eff["數量"], errors="coerce").fillna(0)
+    _p = pd.to_numeric(items_df_eff["單價"], errors="coerce").fillna(0)
+    items_df_eff = items_df_eff[(_q != 0) | (_p != 0) | (items_df_eff["用途合併"].astype(str).str.strip() != "")
+                                | (items_df_eff["內容"].astype(str).str.strip() != "")].reset_index(drop=True)
+    marked = pd.concat([marked_m, marked_g, marked_o], ignore_index=True)
     qty_s = pd.to_numeric(items_df_eff["數量"], errors="coerce").fillna(0)
     price_s = pd.to_numeric(items_df_eff["單價"], errors="coerce").fillna(0)
     grand_total = float((qty_s * price_s).sum())
@@ -1802,29 +1881,27 @@ def _render_plan_generator_inner():
     ba, bb, _bc = st.columns([1.3, 1.3, 4])
 
     def _blank_free(df):
-        name_ok = df["項目"].fillna("").astype(str).str.strip() != ""
-        qty_ok = pd.to_numeric(df["數量"], errors="coerce").fillna(0) != 0
-        return df[name_ok | qty_ok]
+        return df
 
     def _store_items(df):
-        rows = pg.normalize_meal_rows(df.drop(columns=["刪除", "用途合併"], errors="ignore").to_dict("records"),
-                                      d_start, d_end)
+        rows = pg.normalize_meal_rows(
+            df.drop(columns=["刪除", "用途合併", "品名輸出"], errors="ignore").to_dict("records"), d_start, d_end)
         st.session_state["plan_items"] = pd.DataFrame(rows).reset_index(drop=True)
         st.session_state["plan_item_rev"] = item_rev + 1
         st.rerun()
 
     if bb.button("🗑️ 刪除勾選列", use_container_width=True, disabled=not bool(marked.any()), key=f"plan_item_del_{ver}"):
-        kept = _blank_free(items_df_eff)
+        kept = items_df_eff
         if kept.empty:
             kept = pd.DataFrame([{"項目": "", "類別": "設備購置" if is_equip else "一般", "數量": 0, "單位": "",
-                                  "單價": 0, "用途說明": "", "數量說明": ""}])
+                                  "單價": 0, "用途說明": "", "數量說明": "", "內容": ""}])
         _store_items(kept)
     if ba.button("➕ 加入範例列", use_container_width=True, disabled=not ex_pick, key=f"plan_item_add_{ver}"):
         added = pd.DataFrame([
             {"項目": ex_all[i]["name"], "類別": ex_all[i]["kind"], "數量": ex_all[i]["qty"], "單位": ex_all[i]["unit"],
-             "單價": ex_all[i]["price"], "用途說明": ex_all[i]["use"], "數量說明": ""} for i in ex_pick])
-        _store_items(pd.concat([_blank_free(items_df_eff), added], ignore_index=True))
-    st.caption("不需要的列：勾選最左邊的「刪除」後按「刪除勾選列」（兩張表共用這個按鈕；也可選取整列按 Delete）。")
+             "單價": ex_all[i]["price"], "用途說明": ex_all[i]["use"], "數量說明": "", "內容": ""} for i in ex_pick])
+        _store_items(pd.concat([items_df_eff, added], ignore_index=True))
+    st.caption("不需要的列：勾選最左邊的「刪除」後按「刪除勾選列」（三張表共用這個按鈕）。")
 
     step("進階內容與陳報單設定（選填）")
     is_activity = plan_type == "activity"
@@ -1884,7 +1961,7 @@ def _render_plan_generator_inner():
         return out
 
     items = pg.normalize_items(
-        _rows(items_df_eff, {"name": "項目", "kind": "類別", "qty": "數量", "unit": "單位", "price": "單價",
+        _rows(items_df_eff, {"name": "品名輸出", "kind": "類別", "qty": "數量", "unit": "單位", "price": "單價",
                         "use": "用途合併"}),
         subsidy=float(subsidy), source_label=pg.PLAN_TYPES[plan_type]["source_label"], sources=src_list)
     courses = _rows(courses_df, {"date": "日期", "time": "時間", "content": "課程內容", "teacher": "教官／講師"})
@@ -1901,11 +1978,28 @@ def _render_plan_generator_inner():
         org_battalion=acct.battalion if acct is not None else "",
         org_unit=acct.unit if (acct is not None and acct.role == "unit") else "")
     _snapshot_generator_state(ver, {
-        "plan_items": items_df_eff.drop(columns=["刪除", "用途合併"], errors="ignore").reset_index(drop=True),
+        "plan_items": items_df_eff.drop(columns=["刪除", "用途合併", "品名輸出"], errors="ignore").reset_index(drop=True),
         "plan_sources": sources_df.reset_index(drop=True),
         "plan_courses": courses_df.reset_index(drop=True),
         "plan_awards": awards_df.reset_index(drop=True),
         "plan_roster_base": roster_df.reset_index(drop=True)})
+    if cap_box is not None:
+        with cap_box:
+            sm = pg.meal_gift_summary(ctx)
+            if sm["total"] <= 0:
+                st.info("填了概算項目後，這裡會顯示餐費、宣導品、紀念品的上限（總經費的 50%）與目前編列。")
+            else:
+                used = sm["used"] / sm["cap"] if sm["cap"] else 0
+                head = (f"**餐費＋宣導品／紀念品 可編列上限：{sm['cap']:,.0f} 元**（總經費 {sm['total']:,.0f} 元 × 50%）｜"
+                        f"目前編列：餐費 {sm['meal_total']:,.0f} 元＋宣導品／紀念品 {sm['gift_total']:,.0f} 元"
+                        f" = **{sm['used']:,.0f} 元**（上限的 {used:.0%}）")
+                if sm["remaining"] < -0.5:
+                    st.error(head + f"。**已超過 {-sm['remaining']:,.0f} 元**，請至少調降 {sm['excess']:,.0f} 元，"
+                             "或增加其他項目的經費。")
+                elif used > 0.9:
+                    st.warning(head + f"。再加 {sm['headroom']:,.0f} 元就到上限，核銷時單據稍有變動就可能超過。")
+                else:
+                    st.success(head + f"。再加 {sm['headroom']:,.0f} 元的餐費或宣導品、紀念品才會到上限。")
     with award_box:
         _award = pg.award_text(ctx)
         if award_basis == "none":

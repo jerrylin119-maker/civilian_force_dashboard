@@ -42,7 +42,7 @@ class ActivityTypeTests(unittest.TestCase):
         self.assertIn("activity", pg.PLAN_TYPES)
         self.assertEqual(pg.PLAN_TYPES["training"]["audience_label"], "參訓對象")
         self.assertEqual(pg.PLAN_TYPES["activity"]["audience_label"], "參加對象")
-        self.assertEqual(pg.MODULE_REVISION, 10)
+        self.assertEqual(pg.MODULE_REVISION, 11)
 
     def test_activity_sections_use_activity_wording_and_skip_award(self):
         ctx = _activity(purpose="表彰績優人員", method="（一）績優表揚。\n（二）頒獎。")
@@ -351,7 +351,7 @@ class MultiSourceAndEquipmentTests(unittest.TestCase):
         titles = [f.title for f in findings]
         self.assertIn("設備類不適用「自籌款 30%」規定", titles)
         self.assertEqual(_titles(findings, pg.ERROR), [])
-        self.assertNotIn("餐費及紀念品未超過補助金額 50%", titles)
+        self.assertNotIn("餐費、宣導品及紀念品未超過總經費 50%", titles)
         self.assertNotIn("沒有課程表", titles)
         body = pg.submission_body(ctx)
         self.assertIn("估價單2份", body[2])
@@ -647,6 +647,70 @@ class QuantityAndCaseNumberTests(unittest.TestCase):
         wb = load_workbook(io.BytesIO(pg.build_xlsx(ctx)))
         self.assertEqual(wb.active.oddHeader.right.text, "案件編號：115-成-0001")
         self.assertIn("案件編號：115-成-0001", pg.submission_markdown(ctx))
+
+
+class DeidentificationAndGiftTests(unittest.TestCase):
+    def test_plan_type_labels_use_the_same_style(self):
+        self.assertEqual([pg.PLAN_TYPES[k]["label"] for k in ("training", "activity", "equipment")],
+                         ["訓練類（專業訓練活動）", "活動類（表揚／研習／文康）", "設備類（購置設備）"])
+
+    def test_cases_do_not_name_any_real_unit(self):
+        """歷史案例的資料與說明文字不得出現任何分隊、大隊名稱。綠島是員工文康活動的目的地，不是單位。"""
+        import json
+        import case_accounts as ca
+        names = set()
+        for bn, units in ca.ORG.items():
+            names.add(bn.replace("大隊", ""))
+            names.update(u.replace("分隊", "") for u in units)
+        names -= {"綠島"}
+        names |= {"臺東", "台東"}
+        for key in CASE_KEYS:
+            blob = json.dumps(plan_cases.build_case(key, TODAY), ensure_ascii=False, default=str)
+            for name in names:
+                self.assertNotIn(name, blob, f"{key} 資料出現單位名稱 {name}")
+        for ptype in ("training", "activity", "equipment"):
+            for key, label, summary in pg.case_list(ptype):
+                for name in names:
+                    self.assertNotIn(name, label + summary, f"{key} 說明出現單位名稱 {name}")
+
+    def test_gift_rows_are_forced_into_promo_or_souvenir(self):
+        d = date(2026, 12, 12)
+        rows = [
+            {"項目": "伴手禮（致贈友隊紀念品）", "類別": "紀念品", "數量": 30, "單位": "", "單價": 500, "用途說明": "致贈"},
+            {"項目": "宣導手冊", "類別": "紀念品", "數量": 100, "單位": "本", "單價": 20, "用途說明": "發放"},
+            {"項目": "宣導品", "類別": "紀念品", "內容": "環保杯", "數量": 10, "單位": "個", "單價": 50, "用途說明": "發放"},
+        ]
+        out = pg.normalize_meal_rows(rows, d, d)
+        self.assertEqual((out[0]["項目"], out[0]["內容"], out[0]["單位"]), ("紀念品", "伴手禮（致贈友隊紀念品）", "個"))
+        self.assertEqual((out[1]["項目"], out[1]["內容"], out[1]["單位"]), ("宣導品", "宣導手冊", "本"))
+        self.assertEqual((out[2]["項目"], out[2]["內容"]), ("宣導品", "環保杯"))      # 已符合：不動
+
+    def test_meal_and_gift_cap_summary(self):
+        ctx = pg.case_context("study_tour", TODAY)
+        sm = pg.meal_gift_summary(ctx)
+        self.assertAlmostEqual(sm["cap"], ctx.total * 0.5)                      # 以總經費的 50% 為上限
+        self.assertAlmostEqual(sm["meal_total"], sum(i["total"] for i in ctx.items if i["kind"] == "餐費"))
+        self.assertGreater(sm["gift_total"], 0)
+        self.assertAlmostEqual(sm["used"], sm["meal_total"] + sm["gift_total"])
+        self.assertAlmostEqual(sm["remaining"], sm["cap"] - sm["used"])
+        self.assertAlmostEqual(sm["headroom"], ctx.total - 2 * sm["used"])      # 再加 x 元，總經費也增加 x
+        # 驗證 headroom：再加這麼多餐費，剛好到上限
+        self.assertAlmostEqual((sm["used"] + sm["headroom"]) / (ctx.total + sm["headroom"]), 0.5)
+        self.assertEqual(sm["excess"], 0)
+        # 超過時：調降 excess 後剛好回到上限
+        over = pg.case_context("study_tour", TODAY)
+        for i in over.items:
+            if i["kind"] == "紀念品":
+                i["total"] += over.total
+        so = pg.meal_gift_summary(over)
+        self.assertLess(so["remaining"], 0)
+        self.assertGreater(so["excess"], 0)
+        self.assertAlmostEqual((so["used"] - so["excess"]) / (over.total - so["excess"]), 0.5)
+        # 補助款依比例分攤時，總經費 50% 的上限等同補助金額 50%
+        self.assertLessEqual(sm["paid"], ctx.subsidy * 0.5 + 0.5)
+        empty = pg.case_context("honor", TODAY)
+        empty.items = []
+        self.assertEqual(pg.meal_gift_summary(empty)["cap"], 0)
 
 
 if __name__ == "__main__":

@@ -87,17 +87,23 @@ class AllocationTests(unittest.TestCase):
         self.assertIn("二代健保補充保費全數由自籌款支應", titles)
         self.assertNotIn("二代健保補充保費不得使用補助款支應", titles)
 
-    def test_meal_cap_uses_allocated_subsidy(self):
+    def test_meal_cap_is_half_of_total_cost(self):
         ctx = _ctx(items=[
             {"name": "便當", "kind": "餐費", "qty": 1, "price": 8000, "use": "用餐"},
             {"name": "紀念品", "kind": "紀念品", "qty": 1, "price": 8000, "use": "紀念"},
             {"name": "場地", "kind": "一般", "qty": 1, "price": 4000, "use": "場地"},
         ], subsidy=10000)
-        meal = sum(i["subsidy"] for i in ctx.items if i["kind"] in ("餐費", "紀念品"))
-        self.assertGreater(meal, 5000)
-        hit = _levels(pg.check_plan(ctx, today=TODAY), "餐費及紀念品超過補助金額 50%")
+        self.assertEqual(ctx.total, 20000)                        # 餐費＋紀念品 16,000 元，超過總經費 20,000 的一半
+        hit = _levels(pg.check_plan(ctx, today=TODAY), "餐費、宣導品及紀念品超過總經費 50%")
         self.assertEqual(len(hit), 1)
         self.assertEqual(hit[0].level, pg.ERROR)
+        self.assertIn("至少 12,000 元", hit[0].suggestion)       # 2×16,000 − 20,000
+        ok = _ctx(items=[
+            {"name": "便當", "kind": "餐費", "qty": 1, "price": 5000, "use": "用餐"},
+            {"name": "場地", "kind": "一般", "qty": 1, "price": 10000, "use": "場地"},
+        ], subsidy=10000)
+        self.assertEqual(_levels(pg.check_plan(ok, today=TODAY), "餐費、宣導品及紀念品超過總經費 50%"), [])
+        self.assertTrue(_levels(pg.check_plan(ok, today=TODAY), "餐費、宣導品及紀念品未超過總經費 50%"))
 
 
 class CourseTests(unittest.TestCase):
@@ -354,7 +360,7 @@ class ComplianceReportTests(unittest.TestCase):
         self.assertIn("注意要點「申請流程與發文單位」", late.rule)
         self.assertIn("屆時送局期限 2026-10-13，今日 2026-10-22 已逾 9 天", late.comparison)
 
-        meal = _levels(findings, "餐費及紀念品超過補助金額 50%")[0]
+        meal = _levels(findings, "餐費、宣導品及紀念品超過總經費 50%")[0]
         self.assertEqual(meal.level, pg.ERROR)
         self.assertIn("經費概算表「膳費」", meal.where)
         self.assertIn("注意要點「經費比例上限（自籌款、餐費紀念品、雜支）」", meal.rule)
@@ -420,7 +426,7 @@ class AppLoaderTests(unittest.TestCase):
                 source_label="議員建議補助款",
             )
             self.assertEqual(items[0]["subsidy"], 1000)
-            self.assertEqual(loaded.MODULE_REVISION, 10)
+            self.assertEqual(loaded.MODULE_REVISION, 11)
         finally:
             import importlib
             importlib.reload(live)
