@@ -1539,24 +1539,10 @@ def render_plan_generator_page():
     _render_plan_generator_inner()
 
 
-def _shift_roc_dates(text, delta):
-    """把文字裡的「115年12月12日」整串往後（前）移 delta 天。"""
-    import re as _re
-    from datetime import date as _date
-
-    def one(m):
-        try:
-            d = _date(int(m.group(1)) + 1911, int(m.group(2)), int(m.group(3))) + delta
-        except ValueError:
-            return m.group(0)
-        return f"{d.year - 1911}年{d.month}月{d.day}日"
-
-    return _re.sub(r"(\d{2,3})年(\d{1,2})月(\d{1,2})日", one, str(text or ""))
-
-
 def _on_plan_start_change(ver):
     """改開始日期：結束日期、課程表日期、餐費用途說明裡的日期整段一起平移。
     原本沒有日期（空白表單）就讓結束日期等於開始日期。"""
+    pg_mod = load_plan_generator()
     sk, ek, pk = f"plan_start_{ver}", f"plan_end_{ver}", f"plan_prev_start_{ver}"
     new, old, end = st.session_state.get(sk), st.session_state.get(pk), st.session_state.get(ek)
     if not new:
@@ -1576,7 +1562,7 @@ def _on_plan_start_change(ver):
         items = keep["frames"]["plan_items"].copy()
         for col in ("用途說明", "數量說明", "內容"):
             if col in items.columns:
-                items[col] = [_shift_roc_dates(v, delta) for v in items[col]]
+                items[col] = [pg_mod.shift_roc_dates(v, delta) for v in items[col]]
         st.session_state["plan_courses"] = courses
         st.session_state["plan_items"] = items
         st.session_state["plan_edit_rev"] = st.session_state.get("plan_edit_rev", 0) + 1
@@ -2169,8 +2155,8 @@ def render_generator_manual():
     if not manual:
         return
     intro, sections = manual
-    st.markdown("#### 📖 計畫書產生器操作說明")
-    st.caption("第一次使用請先看「二、最快的做法」與兩個完整範例；點章節標題展開。")
+    st.markdown("#### 📖 計畫書產生器與案件登錄操作說明")
+    st.caption("第一次使用請先看「一、開始之前：登入與帳號」「二、整體流程」和兩個完整範例；點章節標題展開。")
     if intro:
         st.markdown(intro)
     for title, body in sections:

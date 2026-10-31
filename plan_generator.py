@@ -1072,6 +1072,18 @@ def meal_use_options(start, end):
     return opts or ["中餐", "晚餐", "中餐及晚餐"]
 
 
+def shift_roc_dates(text, delta):
+    """把文字裡的「115年12月12日」整串往後（前）移 delta 天；輸出格式與 roc_date 相同（月日補零）。"""
+    def one(m):
+        try:
+            d = date(int(m.group(1)) + 1911, int(m.group(2)), int(m.group(3))) + delta
+        except ValueError:
+            return m.group(0)
+        return roc_date(d)
+
+    return re.sub(r"(\d{2,3})年(\d{1,2})月(\d{1,2})日", one, str(text or ""))
+
+
 def merge_meal_use(use, note):
     """餐費備註 = 用途說明（日期＋餐別）＋數量說明（超過人數時寫明來源）。"""
     use, note = str(use or "").strip(), str(note or "").strip()

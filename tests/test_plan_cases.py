@@ -604,6 +604,17 @@ class QuantityAndCaseNumberTests(unittest.TestCase):
             self.assertIn(r["項目"], pg.MEAL_NAMES)
             self.assertIn(r["用途說明"], pg.meal_use_options(d, d))
 
+    def test_shifted_meal_dates_still_match_the_dropdown_options(self):
+        from datetime import timedelta
+        d = date(2026, 12, 12)
+        opts = pg.meal_use_options(d + timedelta(days=-5), d + timedelta(days=-5))          # 12/07：個位數日
+        shifted = pg.shift_roc_dates("115年12月12日中餐及晚餐；25人", timedelta(days=-5))
+        self.assertEqual(shifted, "115年12月07日中餐及晚餐；25人")
+        self.assertIn("115年12月07日中餐及晚餐", opts)
+        self.assertEqual(pg.shift_roc_dates("115年1月3日晚餐", timedelta(days=30)), "115年02月02日晚餐")
+        self.assertEqual(pg.shift_roc_dates("沒有日期", timedelta(days=3)), "沒有日期")
+        self.assertEqual(pg.shift_roc_dates("115年2月30日中餐", timedelta(days=1)), "115年2月30日中餐")   # 不合法日期不動
+
     def test_meal_use_and_note_are_merged_into_the_remark(self):
         self.assertEqual(pg.merge_meal_use("115年12月12日中餐", ""), "115年12月12日中餐")
         self.assertEqual(pg.merge_meal_use("115年12月12日中餐", "學員30人＋工作人員5人"),
