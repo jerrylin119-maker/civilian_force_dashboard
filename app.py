@@ -73,11 +73,11 @@ load_plan_generator()
 
 # 頁面配置
 # 補捐助專區（?view=subsidy）使用自己的分頁標題與圖示，這樣在瀏覽器歷史、書籤、分頁列
-# 才分得出和主網站（業務知識動態看板）是不同的網頁。
+# 才分得出和主網站（義消業務資訊看板）是不同的網頁。
 _IS_SUBSIDY_VIEW = st.query_params.get("view", "") == "subsidy"
 st.set_page_config(
     page_title=("民力運用及訓練科 — 補捐助專區" if _IS_SUBSIDY_VIEW
-                else "臺東縣消防局民力運用及訓練科 — 業務知識動態看板"),
+                else "臺東縣消防局民力運用及訓練科 — 義消業務資訊看板"),
     page_icon="💰" if _IS_SUBSIDY_VIEW else "🚒",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -2334,7 +2334,7 @@ def render_subsidy_view():
     else:
         render_subsidy_business_tab()
 
-    st.caption("資料與「業務知識動態看板」主網站同步更新，內容由臺東縣消防局民力運用及訓練科維護。")
+    st.caption("資料與「義消業務資訊看板」主網站同步更新，內容由臺東縣消防局民力運用及訓練科維護。")
 
 
 # ==================== 補捐助專區（獨立網址）====================
@@ -2348,7 +2348,7 @@ st.markdown("""
 <div class="main-header">
     <div style="display: flex; align-items: center; justify-content: space-between;">
         <div>
-            <h1>🚒 臺東縣消防局民力運用及訓練科 — 業務知識動態看板</h1>
+            <h1>🚒 臺東縣消防局民力運用及訓練科 — 義消業務資訊看板</h1>
             <p>Taitung County Fire Bureau - Civilian & Volunteer Force Training Division | 專業義消承辦人導引 • 承辦人業務即選直達 • 我有話要說雙向回饋</p>
         </div>
         <div style="text-align: right; font-size: 0.85rem; opacity: 0.9;">
