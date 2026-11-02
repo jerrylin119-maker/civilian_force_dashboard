@@ -9,6 +9,7 @@ import re
 from datetime import datetime, timedelta, timezone
 import importlib
 import database as db
+from new_systems import render_sidebar_new_systems, render_system_highlights
 import case_pages
 import case_registry
 import subsidy_content as sc
@@ -2260,6 +2261,7 @@ def render_subsidy_guide():
 
 def render_subsidy_business_tab():
     """💰 補捐助業務頁面（主網站與補捐助專區共用）：使用導覽＋流程總覽。"""
+    render_system_highlights(st, "💰 補捐助業務")
     render_subsidy_guide()
 
     st.markdown("---")
@@ -2370,6 +2372,10 @@ with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/fire-truck.png", width=60)
     st.title("民力看板控制台")
     st.caption("🏢 臺東縣消防局 民力運用及訓練科")
+    st.markdown("---")
+
+    # 0. ⭐ 三個新系統（固定排在最前面，用不同顏色醒目提醒）
+    render_sidebar_new_systems(st)
     st.markdown("---")
 
     # 1. 👤 依承辦人快速查閱與點擊直達
@@ -2702,7 +2708,8 @@ if selected_tab == "🎖️ 專業義消承辦人":
 elif selected_tab == "🚒 義消業務":
     st.markdown("### 【🚒 義消業務】")
     st.caption("👤 **科內承辦人**：廖昱翔科員、林威宇小隊長")
-    
+    render_system_highlights(st, "🚒 義消業務")
+
     tasks_cat = db.get_tasks_by_filter(category="義消業務")
     st.write(f"本分類共有 **{len(tasks_cat)}** 項列管業務：")
     if not tasks_cat:
