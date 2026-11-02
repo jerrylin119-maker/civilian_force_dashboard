@@ -80,7 +80,7 @@ def _bold(text):
 
 def render_sidebar_new_systems(st):
     """側邊欄最上方：三個新系統連結，各自用不同顏色醒目標示。"""
-    st.markdown("#### ⭐ 三大新系統")
+    st.markdown("#### ⭐ 三大新系統手冊操作連結")
     for i, s in enumerate(NEW_SYSTEMS, start=1):
         st.markdown(
             f'<a href="{s["url"]}" target="_blank" rel="noopener" style="text-decoration:none; color:#fff;">'

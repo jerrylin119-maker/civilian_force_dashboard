@@ -2376,6 +2376,11 @@ with st.sidebar:
 
     # 0. ⭐ 三個新系統（固定排在最前面，用不同顏色醒目提醒）
     render_sidebar_new_systems(st)
+    if st.button("📝 新系統修正意見回報（分隊填寫）", use_container_width=True, key="btn_new_system_feedback"):
+        st.session_state["top_main_nav"] = "💬 我有話要說"
+        st.session_state["active_tab"] = "💬 我有話要說"
+        st.session_state["fb_category_sel"] = "新系統修正意見"
+        st.rerun()
     st.markdown("---")
 
     # 1. 👤 依承辦人快速查閱與點擊直達
@@ -2809,7 +2814,7 @@ elif selected_tab == "💬 我有話要說":
         with st.form("add_feedback_form", clear_on_submit=True):
             fb_unit = st.selectbox("所屬單位 / 分隊 *", db.TAITUNG_UNITS)
             fb_submitter = st.text_input("提報人姓名 / 職稱 (選填，可匿名)", placeholder="例：林分隊長、王小隊長、陳隊員...")
-            fb_category = st.selectbox("反映業務類別 *", db.FEEDBACK_CATEGORIES)
+            fb_category = st.selectbox("反映業務類別 *", db.FEEDBACK_CATEGORIES, key="fb_category_sel")
             fb_contact = st.text_input("聯絡電話 / 公務分機 / 信箱 (選填)", placeholder="方便科內承辦人與您直接聯繫說明")
             fb_content = st.text_area("反映內容 / 問題說明 / 具體建議 *", placeholder="請詳細描述您的問題、遇到的困難或改進建議...", height=160)
             
