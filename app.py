@@ -9,10 +9,18 @@ import re
 from datetime import datetime, timedelta, timezone
 import importlib
 import database as db
-from new_systems import render_sidebar_new_systems, render_system_highlights
+from new_systems import render_sidebar_new_systems, render_system_for_task, render_system_highlights
 from welfare_guide import render_welfare_guide
 
 WELFARE_GUIDE_TASK_TITLE = "義消保險及福利互助申請"   # 這張業務卡片展開後改顯示申請流程元件
+
+
+def visible_doc_links(task):
+    """業務的附件連結。福利互助卡片的申請流程已由 render_welfare_guide() 提供，不再顯示「(待補)」的占位連結。"""
+    doc_links = task.get("doc_links")
+    if task["title"] == WELFARE_GUIDE_TASK_TITLE and doc_links:
+        doc_links = "\n".join(ln for ln in doc_links.splitlines() if "待補" not in ln and "待补" not in ln)
+    return doc_links
 import case_pages
 import case_registry
 import subsidy_content as sc
@@ -790,10 +798,7 @@ def render_task_card(task):
         else:
             st.info("暫無詳細 SOP 內容，承辦人可於維護模式補充。")
 
-        doc_links = task.get("doc_links")
-        if is_welfare_card and doc_links:
-            # 申請流程已由 render_welfare_guide() 提供，不再顯示「(待補)」的占位連結
-            doc_links = "\n".join(ln for ln in doc_links.splitlines() if "待補" not in ln and "待补" not in ln)
+        doc_links = visible_doc_links(task)
         if doc_links and doc_links.strip():
             st.markdown("---")
             render_doc_links(doc_links)
@@ -2367,13 +2372,18 @@ CATEGORY_ICON_MAP = {
 }
 
 
-def jump_to_task_view(target_category, target_title):
-    """跨頁跳轉直達指定業務並自動定位展開 SOP"""
+def set_task_jump(target_category, target_title):
+    """設定跳轉目標（不重新執行）。分頁導覽元件建立之後要跳轉時，請用按鈕的 on_click 呼叫這個。"""
     tab_name = CATEGORY_ICON_MAP.get(target_category.strip(), (target_category.strip(), "📄"))[0]
     st.session_state["top_main_nav"] = tab_name
     st.session_state["active_tab"] = tab_name
     st.session_state["target_task_title"] = target_title
     set_flash_message(f"🚀 已切換至【{tab_name}】並為您定位展開【{target_title}】！", icon="🎯")
+
+
+def jump_to_task_view(target_category, target_title):
+    """跨頁跳轉直達指定業務並自動定位展開 SOP"""
+    set_task_jump(target_category, target_title)
     st.rerun()
 
 
@@ -2573,7 +2583,8 @@ with col_kpi4:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ==================== 📢 最新業務異動與宣導重點 (Top 3 即時快訊專區) ====================
-top_highlights = get_top_latest_highlights_safe(limit=3)
+SHOW_TOP_HIGHLIGHTS = False   # 暫時取消首頁「Top 3 即時快訊」區塊；要恢復改成 True
+top_highlights = get_top_latest_highlights_safe(limit=3) if SHOW_TOP_HIGHLIGHTS else []
 
 if top_highlights:
     st.markdown("""
@@ -2705,14 +2716,22 @@ if selected_tab == "🎖️ 專業義消承辦人":
         if matched_tasks:
             for mt in matched_tasks:
                 with st.expander(f"📋 查看【{mt['title']}】SOP 作業規範與相關系統連結", expanded=False):
-                    if mt.get("content_detail") and mt["content_detail"].strip():
+                    if mt["title"] == WELFARE_GUIDE_TASK_TITLE:
+                        render_welfare_guide()
+                    elif mt.get("content_detail") and mt["content_detail"].strip():
                         st.markdown(format_sop_content_smart(mt["content_detail"]))
                     else:
                         st.info("暫無詳細 SOP 內容。")
 
-                    if mt.get("doc_links") and mt["doc_links"].strip():
+                    render_system_for_task(st, mt["title"])
+
+                    mt_doc_links = visible_doc_links(mt)
+                    if mt_doc_links and mt_doc_links.strip():
                         st.markdown("---")
-                        render_doc_links(mt["doc_links"])
+                        render_doc_links(mt_doc_links)
+
+                    st.button(f"🚀 前往【{mt['title']}】業務卡片", key=f"guide_jump_{g.get('id', g['scenario_num'])}_{mt['id']}",
+                              use_container_width=True, on_click=set_task_jump, args=(mt["category"], mt["title"]))
         else:
             st.info("暫無關聯之 SOP 資料。")
 

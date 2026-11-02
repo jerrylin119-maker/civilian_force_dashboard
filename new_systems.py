@@ -95,32 +95,37 @@ def render_sidebar_new_systems(st):
     st.caption("以上為新上線系統，操作重點在對應的業務分頁。")
 
 
+def _render_card(st, s):
+    """新系統的彩色入口卡片：名稱、一句話說明、開啟系統的按鈕。"""
+    links = (
+        f'<a href="{s["url"]}" target="_blank" rel="noopener" style="background:{s["color"]}; color:#fff; '
+        f'padding:6px 14px; border-radius:6px; font-weight:700; text-decoration:none; margin-right:8px; '
+        f'display:inline-block;">🔗 開啟{html.escape(s["link_label"])}</a>'
+    )
+    if s["entry_url"]:
+        links += (
+            f'<a href="{s["entry_url"]}" target="_blank" rel="noopener" style="background:#fff; color:{s["color"]}; '
+            f'border:1px solid {s["color"]}; padding:5px 14px; border-radius:6px; font-weight:700; '
+            f'text-decoration:none; display:inline-block;">🔑 {html.escape(s["entry_label"])}</a>'
+        )
+    st.markdown(
+        f'<div style="background:{s["tint"]}; border:1px solid {s["color"]}; border-left:8px solid {s["color"]}; '
+        f'border-radius:10px; padding:0.9rem 1.2rem; margin:0.4rem 0 0.6rem 0;">'
+        f'<span style="background:{s["color"]}; color:#fff; border-radius:4px; padding:1px 8px; font-size:0.78rem; '
+        f'font-weight:700; margin-right:8px;">🆕 新系統</span>'
+        f'<span style="font-size:1.15rem; font-weight:800; color:{s["color"]};">{s["icon"]} {html.escape(s["name"])}</span>'
+        f'<div style="color:#475569; font-size:0.92rem; margin:0.35rem 0 0.6rem 0;">{html.escape(s["summary"])}</div>'
+        f'{links}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_system_highlights(st, tab_label):
     """在對應的業務分頁最上方，顯示該分頁的新系統入口與操作手冊重點。"""
     for s in NEW_SYSTEMS:
         if s["tab"] != tab_label:
             continue
-        links = (
-            f'<a href="{s["url"]}" target="_blank" rel="noopener" style="background:{s["color"]}; color:#fff; '
-            f'padding:6px 14px; border-radius:6px; font-weight:700; text-decoration:none; margin-right:8px; '
-            f'display:inline-block;">🔗 開啟{html.escape(s["link_label"])}</a>'
-        )
-        if s["entry_url"]:
-            links += (
-                f'<a href="{s["entry_url"]}" target="_blank" rel="noopener" style="background:#fff; color:{s["color"]}; '
-                f'border:1px solid {s["color"]}; padding:5px 14px; border-radius:6px; font-weight:700; '
-                f'text-decoration:none; display:inline-block;">🔑 {html.escape(s["entry_label"])}</a>'
-            )
-        st.markdown(
-            f'<div style="background:{s["tint"]}; border:1px solid {s["color"]}; border-left:8px solid {s["color"]}; '
-            f'border-radius:10px; padding:0.9rem 1.2rem; margin:0.4rem 0 0.6rem 0;">'
-            f'<span style="background:{s["color"]}; color:#fff; border-radius:4px; padding:1px 8px; font-size:0.78rem; '
-            f'font-weight:700; margin-right:8px;">🆕 新系統</span>'
-            f'<span style="font-size:1.15rem; font-weight:800; color:{s["color"]};">{s["icon"]} {html.escape(s["name"])}</span>'
-            f'<div style="color:#475569; font-size:0.92rem; margin:0.35rem 0 0.6rem 0;">{html.escape(s["summary"])}</div>'
-            f'{links}</div>',
-            unsafe_allow_html=True,
-        )
+        _render_card(st, s)
         with st.expander(f"📖 {s['name']}：操作手冊重點", expanded=True):
             for n, step in enumerate(s["steps"], start=1):
                 st.markdown(
@@ -135,3 +140,20 @@ def render_system_highlights(st, tab_label):
                     f'padding:0.5rem 0.8rem; margin-top:0.6rem; font-weight:600;">⚠️ {html.escape(s["note"])}</div>',
                     unsafe_allow_html=True,
                 )
+
+
+# 業務卡片標題 -> 對應的新系統
+TASK_SYSTEM = {
+    "義消專長資料庫定期維護": "roster_cert",
+    "115年義消評核": "assessment",
+    "義消申請補縣府及各鄉鎮公所補捐助案件": "subsidy_plan",
+}
+
+
+def render_system_for_task(st, task_title):
+    """在情境說明裡，業務若有對應的新系統，就顯示該系統的入口卡片。回傳是否有顯示。"""
+    s = _BY_KEY.get(TASK_SYSTEM.get(task_title))
+    if not s:
+        return False
+    _render_card(st, s)
+    return True

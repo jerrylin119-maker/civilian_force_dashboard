@@ -90,6 +90,37 @@ DEATH_INS = {
 }
 COMPANY_NAME = {"cathay": "國泰人壽", "sino": "新光人壽"}
 
+# 保險公司表單檔案(各義消類別資料夾裡的同名複本),依 (義消類別, 公司) 取。
+# claim=理賠申請書、heir=法定繼承人聲明暨同意書、proxy=推派具領同意書、tree=繼承系統表
+FORMS = {
+    ("救災義消", "cathay"): {"claim": "1jjT4AAp9aphEUC8XVRNBqva7caIw_eoy", "heir": "1-KukwQYcejFmTUFKN4CPBlddjm9YdWUJ"},
+    ("救災義消", "sino"): {
+        "claim": "16xLH5R2MB7cHobBrI-MjlSRm_Apjxrgb", "proxy": "1Q_7qmRw3cgnG1E4ELWWOQ-1h3cIdje21",
+        "tree": "1ndrZPFToM26pfO0pdu8UOal5VA6pcwkh",
+    },
+    ("防宣義消", "cathay"): {"claim": "1cpqaCzkeD7SzzoXEzvRittWMpTiIb9bU", "heir": "1aBcOU5Td3IGzSe_pBgOR7AZl4zDSH02m"},
+    ("防宣義消", "sino"): {
+        "claim": "15Cd5LHhBmVyRrCvTwUb8xIU-Dzk2seac", "proxy": "14OsE3TxpYgwRwNzcfx30gfpzE9psIfeF",
+        "tree": "1KmSU1hoylRKW0S7VYJ-FUwd4wSrEUVpZ",
+    },
+    ("救護義消", "cathay"): {"claim": "1pNG_x46eHefHIqprSdWwVHcwwp04VJMl", "heir": "1Z9aj2OspswYDe4Kgc582Uwq_hbHU7Q4a"},
+    ("救護義消", "sino"): {
+        "claim": "1gfZBIWsJjVHCbOV6gdg1TQNiD2Hi6eK0", "proxy": "1t3dRgAUijbFkyAGNjYNOwUsnHwm8uZN4",
+        "tree": "1mWLP4bL2P3Po_cf1cv10Gz7pJvpxdzhm",
+    },
+}
+# 喪葬團保清單裡,有表單檔案可以直接開啟的項目
+FORM_KEY = {
+    "國泰團險理賠申請書": "claim", "法定繼承人聲明暨同意書": "heir",
+    "新光團險理賠申請書": "claim", "推派具領同意書": "proxy", "繼承系統表": "tree",
+}
+
+
+def _form_item(text: str, cat: str | None, company: str | None, kind: str):
+    """文件項目:有對應表單檔案就回傳 (文字, 連結),沒有就回傳純文字。"""
+    fid = FORMS.get((cat, company), {}).get(kind)
+    return (text, _file(fid)) if fid else text
+
 # 文件項目:字串,或 (文字, 連結)
 CASES = {
     "住院醫療(重大傷病)": {
@@ -256,14 +287,18 @@ def render_welfare_guide() -> None:
             if k["ins_kind"] == "death":
                 if company:
                     docs = DEATH_INS[company]
+                    items = [_form_item(d, cat, company, FORM_KEY[d]) if d in FORM_KEY else d for d in docs]
                     _doc_group(f"{title}:共 {len(docs)} 項" + (",須全部備齊" if company == "cathay" else ""),
-                               docs, f"{slug}_ins_{company}")
+                               items, f"{slug}_ins_{company}")
                 else:
                     st.markdown("**團體保險(喪葬)**")
                     st.caption("保險公司還沒確定,國泰人壽共 8 項,新光人壽共 9 項。選好義消類別與事件發生日,這裡會顯示對應的清單。")
             else:
-                _doc_group(title, ["團險理賠申請書(在步驟 2 的保險公司表單資料夾取表)"] + BASE_INS,
-                           f"{slug}_ins_{company or 'x'}")
+                if company:
+                    claim = _form_item(f"{COMPANY_NAME[company]}團險理賠申請書", cat, company, "claim")
+                else:
+                    claim = "團險理賠申請書(先在步驟 2 選義消類別與事件發生日,這裡會提供保險公司的申請書連結)"
+                _doc_group(title, [claim] + BASE_INS, f"{slug}_ins_{company or 'x'}")
         if k["fund"] and use_fund:
             _doc_group("基金會慰問金", k["fund_docs"], f"{slug}_fund")
             if case_name.startswith("因公受傷"):
