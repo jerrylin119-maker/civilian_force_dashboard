@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import importlib
 import database as db
 from new_systems import render_sidebar_new_systems, render_system_highlights
+from welfare_guide import render_welfare_guide
 import case_pages
 import case_registry
 import subsidy_content as sc
@@ -2736,6 +2737,10 @@ elif selected_tab == "🎁 義消福利":
     else:
         for t in tasks_cat:
             render_task_card(t)
+
+    st.markdown("---")
+    with st.container(border=True):
+        render_welfare_guide()
 
 
 # === 4. 補捐助業務 Tab ===
