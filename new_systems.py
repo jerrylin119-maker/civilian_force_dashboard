@@ -120,26 +120,33 @@ def _render_card(st, s):
     )
 
 
+def _render_steps(st, s):
+    for n, step in enumerate(s["steps"], start=1):
+        st.markdown(
+            f'<div style="margin:0.25rem 0;"><span style="background:{s["color"]}; color:#fff; border-radius:50%; '
+            f'display:inline-block; width:1.5rem; height:1.5rem; text-align:center; line-height:1.5rem; '
+            f'font-size:0.8rem; font-weight:700; margin-right:0.5rem;">{n}</span>{_bold(step)}</div>',
+            unsafe_allow_html=True,
+        )
+    if s["note"]:
+        st.markdown(
+            f'<div style="background:#fef3c7; border:1px solid #fde68a; color:#92400e; border-radius:6px; '
+            f'padding:0.5rem 0.8rem; margin-top:0.6rem; font-weight:600;">⚠️ {html.escape(s["note"])}</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def render_system_highlights(st, tab_label):
-    """在對應的業務分頁最上方，顯示該分頁的新系統入口與操作手冊重點。"""
+    """在對應的業務分頁最上方，顯示該分頁的新系統入口與操作手冊重點。
+
+    已取代業務卡片內容的系統（REPLACE_TASK_CONTENT）不在這裡重複顯示。
+    """
     for s in NEW_SYSTEMS:
-        if s["tab"] != tab_label:
+        if s["tab"] != tab_label or s["key"] in REPLACE_TASK_CONTENT.values():
             continue
         _render_card(st, s)
         with st.expander(f"📖 {s['name']}：操作手冊重點", expanded=True):
-            for n, step in enumerate(s["steps"], start=1):
-                st.markdown(
-                    f'<div style="margin:0.25rem 0;"><span style="background:{s["color"]}; color:#fff; border-radius:50%; '
-                    f'display:inline-block; width:1.5rem; height:1.5rem; text-align:center; line-height:1.5rem; '
-                    f'font-size:0.8rem; font-weight:700; margin-right:0.5rem;">{n}</span>{_bold(step)}</div>',
-                    unsafe_allow_html=True,
-                )
-            if s["note"]:
-                st.markdown(
-                    f'<div style="background:#fef3c7; border:1px solid #fde68a; color:#92400e; border-radius:6px; '
-                    f'padding:0.5rem 0.8rem; margin-top:0.6rem; font-weight:600;">⚠️ {html.escape(s["note"])}</div>',
-                    unsafe_allow_html=True,
-                )
+            _render_steps(st, s)
 
 
 # 業務卡片標題 -> 對應的新系統
@@ -156,4 +163,21 @@ def render_system_for_task(st, task_title):
     if not s:
         return False
     _render_card(st, s)
+    return True
+
+
+# 這兩個系統就是原本的業務，業務卡片的 SOP 內容改由系統入口與操作手冊重點取代
+REPLACE_TASK_CONTENT = {
+    "義消專長資料庫定期維護": "roster_cert",
+    "115年義消評核": "assessment",
+}
+
+
+def render_replaced_task_content(st, task_title):
+    """業務卡片展開後的內容：若該業務已由新系統取代，顯示系統入口與操作手冊並回傳 True。"""
+    s = _BY_KEY.get(REPLACE_TASK_CONTENT.get(task_title))
+    if not s:
+        return False
+    _render_card(st, s)
+    _render_steps(st, s)
     return True

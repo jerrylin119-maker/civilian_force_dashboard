@@ -9,7 +9,9 @@ import re
 from datetime import datetime, timedelta, timezone
 import importlib
 import database as db
-from new_systems import render_sidebar_new_systems, render_system_for_task, render_system_highlights
+from new_systems import (
+    NEW_SYSTEMS, render_replaced_task_content, render_sidebar_new_systems, render_system_for_task, render_system_highlights,
+)
 from welfare_guide import render_welfare_guide
 
 WELFARE_GUIDE_TASK_TITLE = "義消保險及福利互助申請"   # 這張業務卡片展開後改顯示申請流程元件
@@ -791,14 +793,17 @@ def render_task_card(task):
     expander_expanded = is_targeted
     is_welfare_card = task["title"] == WELFARE_GUIDE_TASK_TITLE
     with st.expander("📖 查看完整 SOP 作業規範、工作內容細節與附件連結", expanded=expander_expanded):
+        replaced = render_replaced_task_content(st, task["title"])
         if is_welfare_card:
             render_welfare_guide()
+        elif replaced:
+            pass
         elif task.get("content_detail") and task["content_detail"].strip():
             st.markdown(format_sop_content_smart(task["content_detail"]))
         else:
             st.info("暫無詳細 SOP 內容，承辦人可於維護模式補充。")
 
-        doc_links = visible_doc_links(task)
+        doc_links = "" if replaced else visible_doc_links(task)
         if doc_links and doc_links.strip():
             st.markdown("---")
             render_doc_links(doc_links)
@@ -2180,6 +2185,10 @@ def render_generator_manual():
             st.markdown(body)
 
 
+# 計畫書產生器是獨立的外部系統，看板只提供連結，不在看板內使用
+PLAN_GENERATOR_URL = next(x["url"] for x in NEW_SYSTEMS if x["key"] == "subsidy_plan")
+
+
 def render_subsidy_guide():
     """🏠 補捐助專區使用導覽：依「我現在要做什麼」帶同仁走到正確的頁面。"""
     def _go_to_tab(tab_label):
@@ -2210,8 +2219,7 @@ def render_subsidy_guide():
             )
             st.button("➡️ 從申請流程開始", on_click=_go_to_tab, args=("🧭 申請與核銷流程",),
                       use_container_width=True, key="guide_apply_flow", type="primary")
-            st.button("✏️ 直接產生計畫書", on_click=_go_to_tab, args=("✏️ 計畫書產生器",),
-                      use_container_width=True, key="guide_apply_gen")
+            st.link_button("✏️ 前往計畫書產生系統 ↗", PLAN_GENERATOR_URL, use_container_width=True)
     with c2:
         with st.container(border=True):
             st.markdown("##### 🧾 我要辦理核銷")
@@ -2245,7 +2253,6 @@ def render_subsidy_guide():
         ("🧭 申請與核銷流程", "🧭 申請與核銷流程", "完整的申請、核銷流程，分隊／大隊／科室各步驟做什麼，附陳報單範例句與常見問答。"),
         ("📌 申請注意要點", "📌 申請注意要點", "活動費、設備費、共通與核銷的規定：用字、自籌款、餐費比例、單據與附件。"),
         ("⚠️ 錯誤樣態案例", "⚠️ 錯誤樣態案例", "過去常見的退件與缺失，含錯誤說明、造成的問題與正確做法。"),
-        ("✏️ 計畫書產生器", "✏️ 計畫書產生器", "選計畫類型、填必要資料，產出計畫書（Word）、概算表（Excel）與陳報單（Word）草稿，並先檢查規定。"),
         ("✅ 核銷自我檢核", "✅ 核銷自我檢核", "送大隊初審前，自行檢查收支清單金額與核銷文件是否備齊。"),
     ]
     for label, target, desc in pages:
@@ -2255,7 +2262,11 @@ def render_subsidy_guide():
         with cd:
             st.markdown(f"<div style='padding-top:0.35rem; color:#475569;'>{html.escape(desc)}</div>", unsafe_allow_html=True)
 
-    render_generator_manual()
+    cb, cd = st.columns([1.3, 4])
+    with cb:
+        st.link_button("✏️ 計畫書產生系統 ↗", PLAN_GENERATOR_URL, use_container_width=True)
+    with cd:
+        st.markdown("<div style='padding-top:0.35rem; color:#475569;'>外部系統：產生補捐助案件計畫書，點此另開新分頁使用。</div>", unsafe_allow_html=True)
 
     st.markdown("#### 🔢 先記住這幾個數字")
     chips = "".join(
@@ -2295,7 +2306,7 @@ def render_subsidy_business_tab():
 
 
 SUBSIDY_VIEW_URL = "https://civilianforcedashboard.streamlit.app/?view=subsidy"
-SUBSIDY_VIEW_TABS = ["🏠 使用導覽", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✏️ 計畫書產生器", "✅ 核銷自我檢核"]
+SUBSIDY_VIEW_TABS = ["🏠 使用導覽", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✅ 核銷自我檢核"]
 CASE_TAB = "📮 案件登錄"   # 只有 Secrets 有 case_registry 設定時才出現
 
 
@@ -2325,8 +2336,6 @@ def render_subsidy_view():
         render_application_notes_page()
     elif selected == "⚠️ 錯誤樣態案例":
         render_error_cases_page()
-    elif selected == "✏️ 計畫書產生器":
-        render_plan_generator_page()
     elif selected == "✅ 核銷自我檢核":
         render_settlement_check_page()
     elif selected == CASE_TAB:
@@ -2644,7 +2653,7 @@ tab_names = [
 ]
 
 # 補捐助的五個子頁面只在「補捐助業務」分頁（或已在這些子頁面）時才出現在導覽列，其他分頁不顯示
-SUBSIDY_SUB_TABS = ["🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✏️ 計畫書產生器", "✅ 核銷自我檢核"]
+SUBSIDY_SUB_TABS = ["🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✅ 核銷自我檢核"]
 if st.session_state.get("top_main_nav") in ["💰 補捐助業務"] + SUBSIDY_SUB_TABS:
     _i = tab_names.index("💰 補捐助業務") + 1
     tab_names[_i:_i] = SUBSIDY_SUB_TABS
@@ -2719,16 +2728,20 @@ if selected_tab == "🎖️ 專業義消承辦人":
         if matched_tasks:
             for mt in matched_tasks:
                 with st.expander(f"📋 查看【{mt['title']}】SOP 作業規範與相關系統連結", expanded=False):
+                    replaced = render_replaced_task_content(st, mt["title"])
                     if mt["title"] == WELFARE_GUIDE_TASK_TITLE:
                         render_welfare_guide()
+                    elif replaced:
+                        pass
                     elif mt.get("content_detail") and mt["content_detail"].strip():
                         st.markdown(format_sop_content_smart(mt["content_detail"]))
                     else:
                         st.info("暫無詳細 SOP 內容。")
 
-                    render_system_for_task(st, mt["title"])
+                    if not replaced:
+                        render_system_for_task(st, mt["title"])
 
-                    mt_doc_links = visible_doc_links(mt)
+                    mt_doc_links = "" if replaced else visible_doc_links(mt)
                     if mt_doc_links and mt_doc_links.strip():
                         st.markdown("---")
                         render_doc_links(mt_doc_links)
@@ -2791,7 +2804,7 @@ elif selected_tab == "⚠️ 錯誤樣態案例":
 
 # === 4-2b. 計畫書產生器 Tab ===
 elif selected_tab == "✏️ 計畫書產生器":
-    render_plan_generator_page()
+    st.link_button("✏️ 前往計畫書產生系統 ↗", PLAN_GENERATOR_URL)
 
 
 # === 4-3. 核銷自我檢核 Tab ===
