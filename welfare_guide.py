@@ -293,12 +293,17 @@ def render_welfare_guide() -> None:
                 else:
                     st.markdown("**團體保險(喪葬)**")
                     st.caption("保險公司還沒確定,國泰人壽共 8 項,新光人壽共 9 項。選好義消類別與事件發生日,這裡會顯示對應的清單。")
+                    st.markdown("申請書:" + _links(
+                        [(f"{COMPANY_NAME[c]}團險理賠申請書", _file(FORMS[(cat or "救災義消", c)]["claim"])) for c in COMPANY_NAME]
+                    ))
             else:
                 if company:
-                    claim = _form_item(f"{COMPANY_NAME[company]}團險理賠申請書", cat, company, "claim")
+                    claims = [_form_item(f"{COMPANY_NAME[company]}團險理賠申請書", cat, company, "claim")]
                 else:
-                    claim = "團險理賠申請書(先在步驟 2 選義消類別與事件發生日,這裡會提供保險公司的申請書連結)"
-                _doc_group(title, [claim] + BASE_INS, f"{slug}_ins_{company or 'x'}")
+                    # 還不知道是哪一家:兩家的申請書都先列出來,選好義消類別與事件發生日後只剩對應的一家
+                    claims = [_form_item(f"{COMPANY_NAME[c]}團險理賠申請書(用哪一家依義消類別與事件發生日判斷,見步驟 2)",
+                                         cat or "救災義消", c, "claim") for c in COMPANY_NAME]
+                _doc_group(title, claims + BASE_INS, f"{slug}_ins_{company or 'x'}")
         if k["fund"] and use_fund:
             _doc_group("基金會慰問金", k["fund_docs"], f"{slug}_fund")
             if case_name.startswith("因公受傷"):
