@@ -11,6 +11,8 @@ import importlib
 import database as db
 from new_systems import render_sidebar_new_systems, render_system_highlights
 from welfare_guide import render_welfare_guide
+
+WELFARE_GUIDE_TASK_TITLE = "義消保險及福利互助申請"   # 這張業務卡片展開後改顯示申請流程元件
 import case_pages
 import case_registry
 import subsidy_content as sc
@@ -779,15 +781,22 @@ def render_task_card(task):
 
     # 檢視狀態：查看完整 SOP 作業規範與附件
     expander_expanded = is_targeted
+    is_welfare_card = task["title"] == WELFARE_GUIDE_TASK_TITLE
     with st.expander("📖 查看完整 SOP 作業規範、工作內容細節與附件連結", expanded=expander_expanded):
-        if task.get("content_detail") and task["content_detail"].strip():
+        if is_welfare_card:
+            render_welfare_guide()
+        elif task.get("content_detail") and task["content_detail"].strip():
             st.markdown(format_sop_content_smart(task["content_detail"]))
         else:
             st.info("暫無詳細 SOP 內容，承辦人可於維護模式補充。")
-        
-        if task.get("doc_links"):
+
+        doc_links = task.get("doc_links")
+        if is_welfare_card and doc_links:
+            # 申請流程已由 render_welfare_guide() 提供，不再顯示「(待補)」的占位連結
+            doc_links = "\n".join(ln for ln in doc_links.splitlines() if "待補" not in ln and "待补" not in ln)
+        if doc_links and doc_links.strip():
             st.markdown("---")
-            render_doc_links(task["doc_links"])
+            render_doc_links(doc_links)
 
     # ★ 維護模式專屬：直接在該業務卡片下方出現【✏️ 快速編輯此業務】
     if is_admin_mode:
@@ -2737,10 +2746,6 @@ elif selected_tab == "🎁 義消福利":
     else:
         for t in tasks_cat:
             render_task_card(t)
-
-    st.markdown("---")
-    with st.container(border=True):
-        render_welfare_guide()
 
 
 # === 4. 補捐助業務 Tab ===
