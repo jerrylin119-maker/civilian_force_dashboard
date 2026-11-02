@@ -2544,41 +2544,43 @@ if assigned_items:
     st.markdown("<br>", unsafe_allow_html=True)
 
 
-# 全域 KPI 統計指標
-stats = db.get_summary_stats()
-col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+# 全域 KPI 統計指標（暫時隱藏；要恢復改成 True）
+SHOW_KPI_ROW = False
+if SHOW_KPI_ROW:
+    stats = db.get_summary_stats()
+    col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
 
-with col_kpi1:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-title">📋 列管業務總數</div>
-        <div class="metric-value">{stats['total']} <span style="font-size:1rem;color:#64748b;">項</span></div>
-    </div>
-    """, unsafe_allow_html=True)
+    with col_kpi1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">📋 列管業務總數</div>
+            <div class="metric-value">{stats['total']} <span style="font-size:1rem;color:#64748b;">項</span></div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with col_kpi2:
-    st.markdown(f"""
-    <div class="metric-card metric-card-warning">
-        <div class="metric-title">🚀 規劃與執行中案件</div>
-        <div class="metric-value">{stats['in_progress']} <span style="font-size:1rem;color:#64748b;">項</span></div>
-    </div>
-    """, unsafe_allow_html=True)
+    with col_kpi2:
+        st.markdown(f"""
+        <div class="metric-card metric-card-warning">
+            <div class="metric-title">🚀 規劃與執行中案件</div>
+            <div class="metric-value">{stats['in_progress']} <span style="font-size:1rem;color:#64748b;">項</span></div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with col_kpi3:
-    st.markdown(f"""
-    <div class="metric-card metric-card-alert">
-        <div class="metric-title">⚠️ 最新異動宣導提醒</div>
-        <div class="metric-value" style="color:#dc2626;">{stats['highlight']} <span style="font-size:1rem;color:#dc2626;">則</span></div>
-    </div>
-    """, unsafe_allow_html=True)
+    with col_kpi3:
+        st.markdown(f"""
+        <div class="metric-card metric-card-alert">
+            <div class="metric-title">⚠️ 最新異動宣導提醒</div>
+            <div class="metric-value" style="color:#dc2626;">{stats['highlight']} <span style="font-size:1rem;color:#dc2626;">則</span></div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with col_kpi4:
-    st.markdown(f"""
-    <div class="metric-card metric-card-success">
-        <div class="metric-title">💬 我有話要說回饋數</div>
-        <div class="metric-value" style="color:#047857;">{stats['feedback_total']} <span style="font-size:1rem;color:#64748b;">則 ({stats['feedback_replied']}已覆)</span></div>
-    </div>
-    """, unsafe_allow_html=True)
+    with col_kpi4:
+        st.markdown(f"""
+        <div class="metric-card metric-card-success">
+            <div class="metric-title">💬 我有話要說回饋數</div>
+            <div class="metric-value" style="color:#047857;">{stats['feedback_total']} <span style="font-size:1rem;color:#64748b;">則 ({stats['feedback_replied']}已覆)</span></div>
+        </div>
+        """, unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -2636,15 +2638,16 @@ tab_names = [
     "🚒 義消業務",
     "🎁 義消福利",
     "💰 補捐助業務",
-    "🧭 申請與核銷流程",
-    "📌 申請注意要點",
-    "⚠️ 錯誤樣態案例",
-    "✏️ 計畫書產生器",
-    "✅ 核銷自我檢核",
     "🎯 訓練業務",
     "🌟 其他推動業務",
     "💬 我有話要說"
 ]
+
+# 補捐助的五個子頁面只在「補捐助業務」分頁（或已在這些子頁面）時才出現在導覽列，其他分頁不顯示
+SUBSIDY_SUB_TABS = ["🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✏️ 計畫書產生器", "✅ 核銷自我檢核"]
+if st.session_state.get("top_main_nav") in ["💰 補捐助業務"] + SUBSIDY_SUB_TABS:
+    _i = tab_names.index("💰 補捐助業務") + 1
+    tab_names[_i:_i] = SUBSIDY_SUB_TABS
 
 if st.session_state["is_admin"]:
     tab_names.append("⚙️ 科內線上維護 (Excel介面)")
