@@ -2185,10 +2185,6 @@ def render_generator_manual():
             st.markdown(body)
 
 
-# 計畫書產生器是獨立的外部系統，看板只提供連結，不在看板內使用
-PLAN_GENERATOR_URL = next(x["url"] for x in NEW_SYSTEMS if x["key"] == "subsidy_plan")
-
-
 def render_subsidy_guide():
     """🏠 補捐助專區使用導覽：依「我現在要做什麼」帶同仁走到正確的頁面。"""
     def _go_to_tab(tab_label):
@@ -2219,7 +2215,8 @@ def render_subsidy_guide():
             )
             st.button("➡️ 從申請流程開始", on_click=_go_to_tab, args=("🧭 申請與核銷流程",),
                       use_container_width=True, key="guide_apply_flow", type="primary")
-            st.link_button("✏️ 前往計畫書產生系統 ↗", PLAN_GENERATOR_URL, use_container_width=True)
+            st.button("✏️ 直接產生計畫書", on_click=_go_to_tab, args=("✏️ 計畫書產生器",),
+                      use_container_width=True, key="guide_apply_gen")
     with c2:
         with st.container(border=True):
             st.markdown("##### 🧾 我要辦理核銷")
@@ -2253,6 +2250,7 @@ def render_subsidy_guide():
         ("🧭 申請與核銷流程", "🧭 申請與核銷流程", "完整的申請、核銷流程，分隊／大隊／科室各步驟做什麼，附陳報單範例句與常見問答。"),
         ("📌 申請注意要點", "📌 申請注意要點", "活動費、設備費、共通與核銷的規定：用字、自籌款、餐費比例、單據與附件。"),
         ("⚠️ 錯誤樣態案例", "⚠️ 錯誤樣態案例", "過去常見的退件與缺失，含錯誤說明、造成的問題與正確做法。"),
+        ("✏️ 計畫書產生器", "✏️ 計畫書產生器", "選計畫類型、填必要資料，產出計畫書（Word）、概算表（Excel）與陳報單（Word）草稿，先檢查規定，再定稿登錄取得案號。"),
         ("✅ 核銷自我檢核", "✅ 核銷自我檢核", "送大隊初審前，自行檢查收支清單金額與核銷文件是否備齊。"),
     ]
     for label, target, desc in pages:
@@ -2262,11 +2260,7 @@ def render_subsidy_guide():
         with cd:
             st.markdown(f"<div style='padding-top:0.35rem; color:#475569;'>{html.escape(desc)}</div>", unsafe_allow_html=True)
 
-    cb, cd = st.columns([1.3, 4])
-    with cb:
-        st.link_button("✏️ 計畫書產生系統 ↗", PLAN_GENERATOR_URL, use_container_width=True)
-    with cd:
-        st.markdown("<div style='padding-top:0.35rem; color:#475569;'>外部系統：產生補捐助案件計畫書，點此另開新分頁使用。</div>", unsafe_allow_html=True)
+    render_generator_manual()
 
     st.markdown("#### 🔢 先記住這幾個數字")
     chips = "".join(
@@ -2306,7 +2300,7 @@ def render_subsidy_business_tab():
 
 
 SUBSIDY_VIEW_URL = "https://civilianforcedashboard.streamlit.app/?view=subsidy"
-SUBSIDY_VIEW_TABS = ["🏠 使用導覽", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✅ 核銷自我檢核"]
+SUBSIDY_VIEW_TABS = ["🏠 使用導覽", "🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✏️ 計畫書產生器", "✅ 核銷自我檢核"]
 CASE_TAB = "📮 案件登錄"   # 只有 Secrets 有 case_registry 設定時才出現
 
 
@@ -2336,6 +2330,8 @@ def render_subsidy_view():
         render_application_notes_page()
     elif selected == "⚠️ 錯誤樣態案例":
         render_error_cases_page()
+    elif selected == "✏️ 計畫書產生器":
+        render_plan_generator_page()
     elif selected == "✅ 核銷自我檢核":
         render_settlement_check_page()
     elif selected == CASE_TAB:
@@ -2653,7 +2649,7 @@ tab_names = [
 ]
 
 # 補捐助的五個子頁面只在「補捐助業務」分頁（或已在這些子頁面）時才出現在導覽列，其他分頁不顯示
-SUBSIDY_SUB_TABS = ["🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✅ 核銷自我檢核"]
+SUBSIDY_SUB_TABS = ["🧭 申請與核銷流程", "📌 申請注意要點", "⚠️ 錯誤樣態案例", "✏️ 計畫書產生器", "✅ 核銷自我檢核"]
 if st.session_state.get("top_main_nav") in ["💰 補捐助業務"] + SUBSIDY_SUB_TABS:
     _i = tab_names.index("💰 補捐助業務") + 1
     tab_names[_i:_i] = SUBSIDY_SUB_TABS
@@ -2804,7 +2800,7 @@ elif selected_tab == "⚠️ 錯誤樣態案例":
 
 # === 4-2b. 計畫書產生器 Tab ===
 elif selected_tab == "✏️ 計畫書產生器":
-    st.link_button("✏️ 前往計畫書產生系統 ↗", PLAN_GENERATOR_URL)
+    render_plan_generator_page()
 
 
 # === 4-3. 核銷自我檢核 Tab ===
