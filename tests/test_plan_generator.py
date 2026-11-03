@@ -432,5 +432,69 @@ class AppLoaderTests(unittest.TestCase):
             importlib.reload(live)
 
 
+class AutofillMealGiftTests(unittest.TestCase):
+    def _row(self, cat, item, qty, unit="", note=""):
+        return {"類別": cat, "項目": item, "數量": qty, "單位": unit, "數量說明": note, "單價": 100}
+
+    def test_default_units_follow_item(self):
+        self.assertEqual(pg.default_unit("便當"), "份")
+        self.assertEqual(pg.default_unit("便餐"), "桌")
+        self.assertEqual(pg.default_unit("宣導品"), "份")
+        self.assertEqual(pg.default_unit("紀念品"), "個")
+
+    def test_note_says_per_person_only_when_qty_equals_headcount(self):
+        self.assertEqual(pg.auto_qty_note("便當", 30, "份", 30), "每人1份，共30份")
+        self.assertEqual(pg.auto_qty_note("便當", 35, "份", 30), "共35份")
+        self.assertEqual(pg.auto_qty_note("便餐", 5, "桌", 30), "每桌以六人計，共5桌")
+        self.assertEqual(pg.auto_qty_note("紀念品", 0, "個", 30), "")
+
+    def test_auto_note_never_counts_as_explaining_extra_headcount(self):
+        for text in (pg.auto_qty_note("便當", 30, "份", 30), pg.auto_qty_note("便餐", 5, "桌", 30)):
+            self.assertFalse(pg._has_qty_note(text), text)
+
+    def test_choosing_item_fills_unit_and_note(self):
+        rows, changed, snap = pg.autofill_rows([self._row("餐費", "便餐", 5)], None, 30)
+        self.assertTrue(changed)
+        self.assertEqual(rows[0]["單位"], "桌")
+        self.assertEqual(rows[0]["數量說明"], "每桌以六人計，共5桌")
+        rows, changed, _ = pg.autofill_rows(rows, snap, 30)
+        self.assertFalse(changed)
+
+    def test_changing_item_switches_unit_and_note(self):
+        _, _, snap = pg.autofill_rows([self._row("餐費", "便當", 30, "份")], None, 30)
+        rows, changed, _ = pg.autofill_rows([self._row("餐費", "便餐", 30, "份", "每人1份，共30份")], snap, 30)
+        self.assertTrue(changed)
+        self.assertEqual(rows[0]["單位"], "桌")
+        self.assertEqual(rows[0]["數量說明"], "每桌以六人計，共30桌")
+
+    def test_note_follows_quantity_but_manual_note_is_kept(self):
+        rows, _, snap = pg.autofill_rows([self._row("紀念品", "宣導品", 30)], None, 30)
+        self.assertEqual(rows[0]["數量說明"], "每人1份，共30份")
+        rows[0]["數量"] = 40
+        rows, changed, snap = pg.autofill_rows(rows, snap, 30)
+        self.assertTrue(changed)
+        self.assertEqual(rows[0]["數量說明"], "共40份")
+        rows[0]["數量說明"] = "含來賓10位"
+        rows, changed, _ = pg.autofill_rows(rows, snap, 30)
+        self.assertFalse(changed)
+        self.assertEqual(rows[0]["數量說明"], "含來賓10位")
+
+    def test_cleared_note_stays_empty_until_item_or_quantity_changes(self):
+        rows, _, snap = pg.autofill_rows([self._row("餐費", "便當", 30)], None, 30)
+        rows[0]["數量說明"] = ""
+        rows, changed, snap = pg.autofill_rows(rows, snap, 30)
+        self.assertFalse(changed)
+        self.assertEqual(rows[0]["數量說明"], "")
+        rows[0]["數量"] = 32
+        rows, changed, _ = pg.autofill_rows(rows, snap, 30)
+        self.assertEqual(rows[0]["數量說明"], "共32份")
+
+    def test_other_rows_untouched(self):
+        other = {"類別": "一般", "項目": "講師鐘點費", "數量": 6, "單位": "", "數量說明": ""}
+        rows, changed, _ = pg.autofill_rows([other], None, 30)
+        self.assertFalse(changed)
+        self.assertEqual(rows[0], other)
+
+
 if __name__ == "__main__":
     unittest.main()

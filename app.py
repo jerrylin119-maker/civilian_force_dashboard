@@ -1796,7 +1796,7 @@ def _render_plan_generator_inner():
                 "數量": st.column_config.NumberColumn("數量", step=1, format="%d"),
                 "單位": st.column_config.SelectboxColumn("單位", options=["份", "個", "盒", "桌"], default="份"),
                 "單價": st.column_config.NumberColumn("單價", step=10, format="%d"),
-                "數量說明": st.column_config.TextColumn("數量說明", help="數量超過人數所需時，寫明數量來源與用途"),
+                "數量說明": st.column_config.TextColumn("數量說明", help="選項目、填數量後自動產生，可自行修改；數量超過人數所需時，請寫明數量來源與用途"),
             },
         )
         marked_m = meal_df["刪除"].fillna(False).astype(bool)
@@ -1819,17 +1819,20 @@ def _render_plan_generator_inner():
         gift_df = st.data_editor(
             gift_in, num_rows="dynamic", use_container_width=True,
             key=f"plan_gift_editor_{ver}_{item_rev}_{er}",
-            column_order=("刪除", "類別", "項目", "內容", "數量", "單位", "單價", "用途說明"),
+            column_order=("刪除", "類別", "項目", "內容", "數量", "單位", "單價", "用途說明", "數量說明"),
             column_config={
                 "刪除": st.column_config.CheckboxColumn("刪除", help=del_help),
                 "類別": st.column_config.SelectboxColumn("類別", options=["紀念品"], default="紀念品", required=True),
                 "項目": st.column_config.SelectboxColumn("項目", options=list(pg.GIFT_NAMES), default="宣導品", required=True),
                 "內容": st.column_config.TextColumn("內容", help="是什麼東西，例：環保餐具組、活動紀念毛巾"),
                 "數量": st.column_config.NumberColumn("數量", step=1, format="%d"),
+                "單位": st.column_config.SelectboxColumn("單位", options=["份", "個", "組", "盒", "件"], default="份",
+                                                       help="選項目後自動帶入，可再改"),
                 "單價": st.column_config.NumberColumn("單價", step=10, format="%d"),
+                "數量說明": st.column_config.TextColumn("數量說明", help="選項目、填數量後自動產生，可自行修改"),
             },
         )
-        marked_g = gift_df["刪除"].fillna(False).astype(bool)
+        marked_g =gift_df["刪除"].fillna(False).astype(bool)
         gift_eff = gift_df[~marked_g].copy()
         gift_eff["類別"] = "紀念品"
 
@@ -1859,7 +1862,7 @@ def _render_plan_generator_inner():
     for col in ("數量說明", "內容"):
         items_df_eff[col] = items_df_eff[col].fillna("")
     items_df_eff["用途合併"] = [
-        pg.merge_meal_use(u, n) if k == "餐費" else str(u or "")
+        pg.merge_meal_use(u, n) if k in ("餐費", "紀念品") else str(u or "")
         for u, n, k in zip(items_df_eff["用途說明"].fillna(""), items_df_eff["數量說明"], items_df_eff["類別"])]
     items_df_eff["品名輸出"] = [
         (f"{p}（{c}）" if (k == "紀念品" and str(c).strip()) else p)
@@ -1895,7 +1898,18 @@ def _render_plan_generator_inner():
             df.drop(columns=["刪除", "用途合併", "品名輸出"], errors="ignore").to_dict("records"), d_start, d_end)
         st.session_state["plan_items"] = pd.DataFrame(rows).reset_index(drop=True)
         st.session_state["plan_item_rev"] = item_rev + 1
+        st.session_state.pop(f"plan_autofill_{ver}", None)   # 列的順序可能變了，快照重建
         st.rerun()
+
+    # 選了便當／便餐／宣導品／紀念品後，自動帶入單位與數量說明（承辦人自己改過的說明不會被蓋掉）
+    if not is_equip:
+        _plain = items_df_eff.drop(columns=["刪除", "用途合併", "品名輸出"], errors="ignore")
+        _people = int(headcount or 0)
+        _rows, _changed, _snap = pg.autofill_rows(
+            _plain.to_dict("records"), st.session_state.get(f"plan_autofill_{ver}"), _people)
+        st.session_state[f"plan_autofill_{ver}"] = _snap
+        if _changed:
+            _store_items(pd.DataFrame(_rows))
 
     if bb.button("🗑️ 刪除勾選列", use_container_width=True, disabled=not bool(marked.any()), key=f"plan_item_del_{ver}"):
         kept = items_df_eff

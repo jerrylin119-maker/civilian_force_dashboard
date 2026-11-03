@@ -1131,6 +1131,70 @@ def normalize_meal_rows(rows, start=None, end=None):
     return out
 
 
+GIFT_DEFAULT_UNIT = {"宣導品": "份", "紀念品": "個"}
+
+
+def default_unit(name):
+    """餐費、宣導品、紀念品選了項目之後預設的單位。"""
+    return MEAL_DEFAULT_UNIT.get(name) or GIFT_DEFAULT_UNIT.get(name) or ""
+
+
+def auto_qty_note(name, qty, unit, people):
+    """依項目、數量、單位產生「數量說明」。
+
+    只在數量剛好等於人數時寫「每人1份」；其他情形只寫「共幾份」，超過人數的原因要由承辦人自己寫，
+    這裡不代寫。文字刻意不含「○人」，避免被人數合理性檢查當成已說明來源。"""
+    try:
+        qty = int(qty or 0)
+    except (TypeError, ValueError):
+        return ""
+    unit = str(unit or "").strip()
+    if qty <= 0 or not unit:
+        return ""
+    if unit in ("桌", "席"):
+        return f"每桌以六人計，共{qty}{unit}"
+    if name in ("便當", "便餐", "宣導品", "紀念品") and people and qty == people:
+        return f"每人1{unit}，共{qty}{unit}"
+    return f"共{qty}{unit}"
+
+
+def autofill_rows(rows, prev, people):
+    """餐費、宣導品／紀念品列：改了項目就帶入對應單位，並自動產生數量說明。
+
+    prev 是上一次的快照 {(類別, 第幾列): (項目, 數量, 自動說明)}。承辦人自己改過的數量說明不會被蓋掉；
+    清空後除非項目或數量變了，否則不再補回。回傳 (列, 是否有變動, 新快照)。"""
+    out, snap, changed, pos = [], {}, False, {}
+    for r in rows:
+        r = dict(r)
+        cat = str(r.get("類別") or "")
+        if cat not in ("餐費", "紀念品"):
+            out.append(r)
+            continue
+        i = pos[cat] = pos.get(cat, -1) + 1
+        item = str(r.get("項目") or "").strip()
+        qty = r.get("數量")
+        qty = int(qty) if isinstance(qty, (int, float)) and qty == qty else 0
+        p = prev.get((cat, i)) if prev else None
+        unit = str(r.get("單位") or "").strip()
+        if item and (not unit or (p and p[0] != item)):
+            if default_unit(item) and unit != default_unit(item):
+                unit = default_unit(item)
+        note = str(r.get("數量說明") or "").strip()
+        auto = auto_qty_note(item, qty, unit, people) if item else ""
+        if not note:
+            new_note = auto if (p is None or p[0] != item or p[1] != qty or not p[2]) else ""
+        elif p and note == p[2]:
+            new_note = auto
+        else:
+            new_note = note
+        if unit != str(r.get("單位") or "").strip() or new_note != note:
+            changed = True
+        r["單位"], r["數量說明"] = unit, new_note
+        snap[(cat, i)] = (item, qty, auto)
+        out.append(r)
+    return out, changed, snap
+
+
 def meal_gift_summary(ctx):
     """餐費＋宣導品／紀念品的上限（總經費的 50%）與目前編列，給畫面上方的提示用。
 
