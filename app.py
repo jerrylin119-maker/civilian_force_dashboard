@@ -2321,6 +2321,10 @@ def render_subsidy_view():
     tabs = SUBSIDY_VIEW_TABS + ([CASE_TAB] if case_pages.is_enabled() else [])
     if st.session_state.get("top_main_nav") not in tabs:
         st.session_state["top_main_nav"] = tabs[0]
+    # 網址帶 &tab=generator 時，第一次進來直接開在計畫書產生器（新系統卡片的「計畫產生器」按鈕用）
+    if st.query_params.get("tab", "") == "generator" and not st.session_state.get("_generator_deeplink_used"):
+        st.session_state["_generator_deeplink_used"] = True
+        st.session_state["top_main_nav"] = "✏️ 計畫書產生器"
     selected = st.radio("專區導覽", tabs, horizontal=True,
                         label_visibility="collapsed", key="top_main_nav")
 

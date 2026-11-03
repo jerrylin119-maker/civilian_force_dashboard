@@ -163,7 +163,10 @@ class HistoricalCaseTests(unittest.TestCase):
             "rope_two_days", "water_rescue", "mountain_three_days",
         ])
         equipment = [k for k, _l, _s in pg.case_list("equipment")]
-        self.assertEqual(equipment, ["equip_rescue"])
+        self.assertEqual(equipment, [
+            "equip_rescue", "equip_office_battalion", "equip_office_squad", "equip_printer",
+            "equip_computer", "equip_cabinet", "equip_ems_office", "equip_station_kitchen",
+        ])
         self.assertEqual(activity + training + equipment, CASE_KEYS)
 
     def test_original_totals_are_preserved(self):
@@ -174,6 +177,10 @@ class HistoricalCaseTests(unittest.TestCase):
             "mountain_three_days": (86750, 60000),
             "award_dinner": (48000, 20000), "env_study": (20000, 20000),
             "equip_rescue": (97423, 97423),
+            "equip_office_battalion": (149984, 149984), "equip_office_squad": (50000, 50000),
+            "equip_printer": (30000, 30000), "equip_computer": (145160, 145000),
+            "equip_cabinet": (100000, 100000), "equip_ems_office": (150000, 150000),
+            "equip_station_kitchen": (60000, 60000),
         }
         for key, (total, subsidy) in expected.items():
             ctx = pg.case_context(key, TODAY)
@@ -225,7 +232,7 @@ class HistoricalCaseTests(unittest.TestCase):
         for key in CASE_KEYS:
             data = pg.case_inputs(key, TODAY)
             data = {k: (v.isoformat() if isinstance(v, date) else v) for k, v in data.items()
-                    if k not in ("items", "courses")}
+                    if k not in ("items", "courses", "subsidy")}
             blob += json.dumps(data, ensure_ascii=False)
             blob += json.dumps([[i["name"], i["use"]] for i in pg.case_inputs(key, TODAY)["items"]], ensure_ascii=False)
             blob += json.dumps([[c["content"], c["teacher"]] for c in pg.case_inputs(key, TODAY)["courses"]],

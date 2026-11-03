@@ -54,16 +54,17 @@ NEW_SYSTEMS = [
         "name": "補捐助案件計畫產生系統",
         "short": "補捐助計畫產生系統",
         "url": "https://claude.ai/artifact/8BaVrukXwZhCyqpJGR4fcw",
-        "link_label": "系統操作",
-        "entry_url": "",
-        "entry_label": "",
+        "link_label": "系統操作說明",
+        "entry_url": "https://civilianforcedashboard.streamlit.app/?view=subsidy&tab=generator",
+        "entry_label": "計畫產生器",
+        "entry_icon": "✏️",
         "color": "#0f766e",
         "tint": "#f0fdfa",
         "tab": "💰 補捐助業務",
         "summary": "被派任務寫議員補助款案件但沒有頭緒，就從這裡開始",
         "steps": [
             "**適用情境**：被指派辦理議員補助款案件，但不知道從哪裡下手。",
-            "**怎麼用**：點上方按鈕進入系統，依畫面引導產生補捐助案件計畫。",
+            "**怎麼用**：先看「系統操作說明」，再按「計畫產生器」進入系統，依畫面引導產生補捐助案件計畫。",
         ],
         "note": "",
     },
@@ -106,7 +107,7 @@ def _render_card(st, s):
         links += (
             f'<a href="{s["entry_url"]}" target="_blank" rel="noopener" style="background:#fff; color:{s["color"]}; '
             f'border:1px solid {s["color"]}; padding:5px 14px; border-radius:6px; font-weight:700; '
-            f'text-decoration:none; display:inline-block;">🔑 {html.escape(s["entry_label"])}</a>'
+            f'text-decoration:none; display:inline-block;">{s.get("entry_icon", "🔑")} {html.escape(s["entry_label"])}</a>'
         )
     st.markdown(
         f'<div style="background:{s["tint"]}; border:1px solid {s["color"]}; border-left:8px solid {s["color"]}; '
