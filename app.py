@@ -278,6 +278,13 @@ st.markdown("""
         font-size: 0.95rem;
         font-weight: 600;
         margin: 0;
+        color: #334155 !important;   /* 夜間模式下文字預設是白色，白底導覽鈕會看不到字，明確指定深色字 */
+    }
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label:hover div[data-testid="stMarkdownContainer"] p {
+        color: #1d4ed8 !important;
+    }
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) div[data-testid="stMarkdownContainer"] p {
+        color: #ffffff !important;
     }
 
     /* 專業義消承辦人專屬精簡情境卡片 */

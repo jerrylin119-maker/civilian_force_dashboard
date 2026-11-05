@@ -14,7 +14,8 @@ env.bak/
 venv.bak/
 
 # Streamlit local credentials and cache
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 
 # OS generated files
 .DS_Store
