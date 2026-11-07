@@ -2872,6 +2872,44 @@ elif selected_tab == "💬 我有話要說":
     </div>
     """, unsafe_allow_html=True)
 
+    # ---- 📍 單位簽到：記錄哪些單位來瀏覽過 ----
+    signins = db.get_signin_summary()
+    all_units = [u for u in db.TAITUNG_UNITS if u not in ("民力訓練科", "救災救護指揮中心", "安檢隊", "其他科室/大隊")]   # 簽到只列大隊與分隊，不含科室
+    signed_units = [u for u in all_units if u in signins]
+    with st.container(border=True):
+        st.markdown("#### 📍 單位簽到 — 讓科內知道你們來看過了")
+        sc1, sc2, sc3 = st.columns([3, 3, 2])
+        with sc1:
+            sg_unit = st.selectbox("所屬單位 / 分隊", all_units, key="signin_unit")
+        with sc2:
+            sg_name = st.text_input("簽到人（選填）", placeholder="例：林小隊長", key="signin_name", max_chars=30)
+        with sc3:
+            st.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
+            sg_go = st.button("✍️ 簽到", type="primary", use_container_width=True, key="signin_btn")
+        if sg_go:
+            if db.add_unit_signin(sg_unit, sg_name):
+                st.success(f"✅ 【{sg_unit}】簽到完成，謝謝！")
+            else:
+                st.info(f"【{sg_unit}】剛剛已經簽到過了（{db.SIGNIN_DEDUP_MINUTES} 分鐘內不重複記錄）。")
+            signins = db.get_signin_summary()
+            signed_units = [u for u in all_units if u in signins]
+        st.caption(f"已簽到 **{len(signed_units)} / {len(all_units)}** 個單位")
+        st.progress(len(signed_units) / max(len(all_units), 1))
+        with st.expander("查看各單位簽到狀況", expanded=False):
+            done_html = "　".join(
+                f"<span style='background:#dcfce7;color:#166534;padding:2px 8px;border-radius:6px;display:inline-block;margin:2px;'>"
+                f"✅ {html.escape(u)}（{signins[u]['count']} 次，最近 {signins[u]['last'][5:16]}）</span>"
+                for u in signed_units
+            ) or "尚無單位簽到"
+            todo_html = "".join(
+                f"<span style='background:#f1f5f9;color:#64748b;padding:2px 8px;border-radius:6px;display:inline-block;margin:2px;'>"
+                f"{html.escape(u)}</span>"
+                for u in all_units if u not in signins
+            ) or "全部單位都簽到了 🎉"
+            st.markdown(f"**已簽到**<br>{done_html}", unsafe_allow_html=True)
+            st.markdown(f"<div style='margin-top:0.6rem'><b>尚未簽到</b><br>{todo_html}</div>", unsafe_allow_html=True)
+
+
     col_fb_form, col_fb_list = st.columns([4, 6])
 
     # 左側：填寫反映表單

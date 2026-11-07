@@ -466,6 +466,15 @@ def init_db(force_reseed=False):
     """)
 
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS UnitSignIn (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            unit_name TEXT NOT NULL,
+            visitor TEXT,
+            signed_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS FeedbackDatabase (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             unit_name TEXT NOT NULL,
@@ -1380,6 +1389,60 @@ def get_top_latest_highlights(limit=3):
     )
     return sorted_tasks[:limit]
 
+SIGNIN_DEDUP_MINUTES = 30   # 同一單位 30 分鐘內重複簽到只算一次，避免重新整理灌水
+
+def _tw_now():
+    from datetime import timezone, timedelta
+    return datetime.now(timezone(timedelta(hours=8)))
+
+def add_unit_signin(unit_name, visitor=""):
+    """單位簽到。回傳 True=新增，False=30 分鐘內已簽到過（不重複記錄）。"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now = _tw_now()
+    cursor.execute("SELECT signed_at FROM UnitSignIn WHERE unit_name = ? ORDER BY id DESC LIMIT 1", (unit_name,))
+    last = cursor.fetchone()
+    if last:
+        try:
+            last_dt = datetime.strptime(last[0], "%Y-%m-%d %H:%M:%S")
+            if (now.replace(tzinfo=None) - last_dt).total_seconds() < SIGNIN_DEDUP_MINUTES * 60:
+                conn.close()
+                return False
+        except ValueError:
+            pass
+    cursor.execute("INSERT INTO UnitSignIn (unit_name, visitor, signed_at) VALUES (?, ?, ?)",
+                   (unit_name, (visitor or "").strip()[:30], now.strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+    return True
+
+def get_signin_summary():
+    """回傳 {單位: {"count": 次數, "last": 最後簽到時間}}，只含簽到過的單位。"""
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT unit_name, COUNT(*), MAX(signed_at) FROM UnitSignIn GROUP BY unit_name")
+    rows = cursor.fetchall()
+    conn.close()
+    return {r[0]: {"count": r[1], "last": r[2]} for r in rows}
+
+def get_all_signins():
+    init_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, unit_name, visitor, signed_at FROM UnitSignIn ORDER BY id ASC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def clear_unit_signins():
+    init_db()
+    conn = get_db_connection()
+    conn.execute("DELETE FROM UnitSignIn")
+    conn.commit()
+    conn.close()
+
 def get_all_assigned_tasks():
     """取得所有民力科近期交辦協助事項 (依排序與建立時間)"""
     init_db()
@@ -1902,6 +1965,10 @@ def push_full_backup_to_github(owner, repo, pat, branch="main", backup_path="clo
     except Exception:
         assigned = []
     full_data["assigned_tasks"] = assigned
+    try:
+        full_data["unit_signins"] = get_all_signins()
+    except Exception:
+        full_data["unit_signins"] = []
     from datetime import timezone, timedelta
     tw_tz = timezone(timedelta(hours=8))
     full_data["backup_created_at"] = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S (台灣時間)")
@@ -2004,6 +2071,17 @@ def restore_from_github_backup(backup_obj):
                 at.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
                 at.get("updated_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             ))
+        conn.commit()
+        conn.close()
+    signin_list = backup_obj.get("unit_signins", [])
+    if signin_list:
+        init_db()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM UnitSignIn")
+        for sg in signin_list:
+            cursor.execute("INSERT INTO UnitSignIn (unit_name, visitor, signed_at) VALUES (?, ?, ?)",
+                           (sg.get("unit_name", ""), sg.get("visitor", ""), sg.get("signed_at", "")))
         conn.commit()
         conn.close()
     return ok, msg
