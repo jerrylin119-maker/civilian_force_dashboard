@@ -1,3 +1,4 @@
+import threading
 import json
 # -*- coding: utf-8 -*-
 
@@ -177,6 +178,34 @@ if "selected_sidebar_owner" not in st.session_state:
     st.session_state["selected_sidebar_owner"] = "全部承辦人"
 if "search_query" not in st.session_state:
     st.session_state["search_query"] = ""
+
+_AUTO_BACKUP_LOCK = threading.Lock()
+
+
+def auto_backup_async():
+    """留言、簽到、回覆有異動時，在背景自動把全系統資料推到 GitHub 雲端備份。
+
+    Token 優先讀 Streamlit Secrets 的 github_pat（重新部署也不會消失），
+    沒有的話用維護模式存的 PAT；兩者都沒有就略過（不影響原本功能）。
+    """
+    try:
+        pat = st.secrets.get("github_pat")
+    except Exception:
+        pat = None
+    pat = str(pat or db.get_github_pat() or "").strip()
+    if not pat:
+        return
+
+    def _run():
+        with _AUTO_BACKUP_LOCK:   # 同時多筆異動時依序推送，避免互相覆蓋
+            try:
+                db.push_full_backup_to_github(db.GITHUB_OWNER, db.GITHUB_REPO, pat)
+            except Exception:
+                pass
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 
 def get_valid_admin_passwords():
     """取得科內維護模式的合法密碼集合。
@@ -2888,6 +2917,7 @@ elif selected_tab == "💬 我有話要說":
             sg_go = st.button("✍️ 簽到", type="primary", use_container_width=True, key="signin_btn")
         if sg_go:
             if db.add_unit_signin(sg_unit, sg_name):
+                auto_backup_async()
                 st.success(f"✅ 【{sg_unit}】簽到完成，謝謝！")
             else:
                 st.info(f"【{sg_unit}】剛剛已經簽到過了（{db.SIGNIN_DEDUP_MINUTES} 分鐘內不重複記錄）。")
@@ -2928,6 +2958,7 @@ elif selected_tab == "💬 我有話要說":
                     st.error("請務必填寫「所屬單位/分隊」及「反映內容」！")
                 else:
                     new_fb_id = db.add_feedback(fb_unit, fb_submitter, fb_category, fb_content, fb_contact)
+                    auto_backup_async()
                     set_flash_message(f"🎉 成功送出意見！留言編號 #{new_fb_id}【{fb_unit}】，民力運用及訓練科將盡速查明查覆。", icon="💌")
                     st.rerun()
 
@@ -3162,6 +3193,7 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
 
                 if rep_btn:
                     db.reply_feedback(sel_fb_id, reply_status, reply_content)
+                    auto_backup_async()
                     set_flash_message(f"🎉 成功發布回覆！已更新留言 ID #{sel_fb_id}【{cur_fb['unit_name']}】為「{reply_status}」，前台看板已即時公開。", icon="📢")
                     st.rerun()
 
@@ -3659,3 +3691,19 @@ elif selected_tab == "⚙️ 科內線上維護 (Excel介面)":
                         set_flash_message(f"🗑️ 已刪除該交辦事項。", icon="🗑️")
                         st.rerun()
 
+
+# ========== 維護模式改動自動備份：資料內容有變就推到備份分支（不需手動按上傳）==========
+if st.session_state.get("is_admin"):
+    try:
+        import hashlib
+        _data = db.get_full_system_data()
+        _data.pop("export_time", None)   # 每次匯出都不同，不算資料異動
+        _snap = json.dumps(
+            {**_data, "assigned_tasks": db.get_all_assigned_tasks(), "unit_signins": db.get_all_signins()},
+            ensure_ascii=False, sort_keys=True, default=str)
+        _h = hashlib.md5(_snap.encode("utf-8")).hexdigest()
+        if "_admin_data_hash" in st.session_state and st.session_state["_admin_data_hash"] != _h:
+            auto_backup_async()
+        st.session_state["_admin_data_hash"] = _h
+    except Exception:
+        pass

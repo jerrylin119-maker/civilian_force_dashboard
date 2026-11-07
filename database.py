@@ -1951,7 +1951,24 @@ def get_cloud_sync_meta():
     conn.close()
     return (r1[0] if r1 else ""), (r2[0] if r2 else "")
 
-def push_full_backup_to_github(owner, repo, pat, branch="main", backup_path="cloud_backup/minli_backup.json"):
+BACKUP_BRANCH = "data-backup"   # 備份放獨立分支：推到 main 會讓 Streamlit 重新部署、把線上資料洗回舊版
+
+def _ensure_backup_branch(owner, repo, branch, headers):
+    """備份分支不存在就從 main 建立（Contents API 不會自動建分支）。"""
+    import urllib.request, urllib.error, json as py_json
+    base = f"https://api.github.com/repos/{owner}/{repo}"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(f"{base}/git/ref/heads/{branch}", headers=headers), timeout=10):
+            return
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            return
+    with urllib.request.urlopen(urllib.request.Request(f"{base}/git/ref/heads/main", headers=headers), timeout=10) as r:
+        main_sha = py_json.loads(r.read().decode("utf-8"))["object"]["sha"]
+    body = py_json.dumps({"ref": f"refs/heads/{branch}", "sha": main_sha}).encode("utf-8")
+    urllib.request.urlopen(urllib.request.Request(f"{base}/git/refs", data=body, headers=headers, method="POST"), timeout=10).read()
+
+def push_full_backup_to_github(owner, repo, pat, branch=BACKUP_BRANCH, backup_path="cloud_backup/minli_backup.json"):
     """將全系統資料打包成 JSON，推送到 GitHub 倉庫指定路徑（覆蓋同名檔案）"""
     import urllib.request
     import base64
@@ -1984,10 +2001,15 @@ def push_full_backup_to_github(owner, repo, pat, branch="main", backup_path="clo
         "User-Agent": "ttfd-minli-dashboard"
     }
 
+    try:
+        _ensure_backup_branch(owner, repo, branch, headers)
+    except Exception as e:
+        return False, "", f"建立備份分支失敗：{e}"
+
     # 先查是否已存在（取得 SHA 用於更新）
     sha = None
     try:
-        get_req = urllib.request.Request(api_url, headers=headers)
+        get_req = urllib.request.Request(api_url + f"?ref={branch}", headers=headers)
         with urllib.request.urlopen(get_req, timeout=10) as resp:
             existing = py_json.loads(resp.read().decode("utf-8"))
             sha = existing.get("sha")
@@ -2090,29 +2112,52 @@ GITHUB_OWNER = "jerrylin119-maker"
 GITHUB_REPO  = "civilian_force_dashboard"
 GITHUB_BACKUP_PATH = "cloud_backup/minli_backup.json"
 
-def fetch_backup_public(owner=GITHUB_OWNER, repo=GITHUB_REPO,
-                        branch="main", backup_path=GITHUB_BACKUP_PATH):
-    """不需要 PAT，直接從 GitHub raw URL 取得備份 JSON（公開倉庫適用）"""
+def _fetch_backup_branch(owner, repo, branch, backup_path):
+    """讀單一分支的備份：先走 API（無快取），失敗再用 raw URL。"""
     import urllib.request
     import json as py_json
+    urls = [
+        (f"https://api.github.com/repos/{owner}/{repo}/contents/{backup_path}?ref={branch}",
+         {"Accept": "application/vnd.github.raw"}),
+        (f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{backup_path}",
+         {"Cache-Control": "no-cache"}),
+    ]
+    for url, extra in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "ttfd-minli-dashboard", **extra})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return py_json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            continue
+    return None
 
-    raw_url = (
-        f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{backup_path}"
-    )
-    try:
-        req = urllib.request.Request(
-            raw_url,
-            headers={"User-Agent": "ttfd-minli-dashboard", "Cache-Control": "no-cache"}
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            content = resp.read().decode("utf-8")
-        backup_obj = py_json.loads(content)
-        return True, backup_obj, ""
-    except Exception as e:
-        return False, None, str(e)
+def fetch_backup_public(owner=GITHUB_OWNER, repo=GITHUB_REPO,
+                        branch=None, backup_path=GITHUB_BACKUP_PATH):
+    """不需要 PAT，從公開倉庫取得備份 JSON。備份分支與 main 兩處都讀，採用較新的一份。"""
+    branches = [branch] if branch else [BACKUP_BRANCH, "main"]
+    found = [(b, _fetch_backup_branch(owner, repo, b, backup_path)) for b in branches]
+    found = [obj for _b, obj in found if isinstance(obj, dict)]
+    if not found:
+        return False, None, "找不到備份"
+    return True, max(found, key=lambda o: str(o.get("backup_created_at", ""))), ""
+
+_STARTUP_RESTORE_DONE = False
+
+def _on_streamlit_cloud():
+    return os.path.exists("/mount/src")
 
 def auto_restore_on_startup():
-    """若本機 DB 業務資料表是空的，自動從 GitHub 公開備份還原（無需 PAT）"""
+    """啟動時從 GitHub 備份還原（無需 PAT）。
+
+    Streamlit Cloud 每次重新部署都會用倉庫裡的舊 DB 檔，線上新增的資料會被洗掉，
+    所以雲端上每次啟動（每個程序一次）都以備份為準；本機則只在 DB 是空的才還原。
+    """
+    global _STARTUP_RESTORE_DONE
+    cloud = _on_streamlit_cloud()
+    if cloud and _STARTUP_RESTORE_DONE:
+        return False, "本次啟動已還原過"
+    if cloud:
+        _STARTUP_RESTORE_DONE = True
     init_db()
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2120,7 +2165,7 @@ def auto_restore_on_startup():
     task_count = cursor.fetchone()[0]
     conn.close()
 
-    if task_count > 0:
+    if task_count > 0 and not cloud:
         return False, "DB 已有資料，無需還原"
 
     ok, backup_obj, err = fetch_backup_public()
