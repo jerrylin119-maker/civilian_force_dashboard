@@ -173,7 +173,8 @@ class DeptRuleTests(unittest.TestCase):
         self.civil = self.book.authenticate("民力訓練科", "newpass1")
         self.rescue = self.book.authenticate("災害搶救科", "newpass1")
         self.no = self.reg.submit(self.unit, sample())
-        self.reg.update_stage(self.bn, self.no, "first_review", {"first_result": "通過"})
+        self.reg.update_stage(self.bn, self.no, "first_review",
+                              {"first_result": "通過", "review_checks": [k for k, _ in cr.review_items(True)]})
 
     def test_sections_cannot_submit(self):
         with self.assertRaises(cr.RegistryError):

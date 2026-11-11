@@ -12,6 +12,10 @@ def acct(role, login="u", battalion="成功大隊", unit="成功分隊", display
     return cr.Account(login=login, role=role, battalion=battalion, unit=unit, display=display)
 
 
+def _passed_review():
+    return {"first_result": "通過", "review_checks": [k for k, _ in cr.review_items(True)]}
+
+
 def sample(**over):
     d = {"battalion": "成功大隊", "unit": "成功分隊", "officer": "王小明", "purpose": "活動費",
          "plan_name": "臺東縣消防局辦理成功義消分隊115年度績優表揚活動計畫",
@@ -117,7 +121,7 @@ class RegistryTests(unittest.TestCase):
 
     def test_full_flow_and_status(self):
         no = self.reg.submit(self.unit, sample())
-        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "通過"})
+        self.reg.update_stage(self.bn, no, "first_review", _passed_review())
         c = self.reg.get(no)
         self.assertEqual((c.status, c["first_by"]), ("待業務科收件", "邱"))
         self.reg.update_stage(self.sec, no, "second_review", {"received": True, "apply_doc_no": "1639"})
@@ -145,10 +149,10 @@ class RegistryTests(unittest.TestCase):
     def test_permissions(self):
         no = self.reg.submit(self.unit, sample())
         with self.assertRaises(cr.RegistryError):
-            self.reg.update_stage(self.unit, no, "first_review", {"first_result": "通過"})
+            self.reg.update_stage(self.unit, no, "first_review", _passed_review())
         other_bn = acct(cr.ROLE_BATTALION, "bn2", battalion="關山大隊", unit="")
         with self.assertRaises(cr.RegistryError):
-            self.reg.update_stage(other_bn, no, "first_review", {"first_result": "通過"})
+            self.reg.update_stage(other_bn, no, "first_review", _passed_review())
         with self.assertRaises(cr.RegistryError):
             self.reg.update_stage(self.bn, no, "second_review", {"received": True})
 
@@ -172,7 +176,7 @@ class RegistryTests(unittest.TestCase):
 
     def test_log_records_changes(self):
         no = self.reg.submit(self.unit, sample())
-        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "通過"})
+        self.reg.update_stage(self.bn, no, "first_review", _passed_review())
         log = self.store.read_log()
         self.assertEqual([r["階段"] for r in log], ["① 登錄", "② 申請初審"])
         self.assertIn("初審結果：", log[1]["異動內容"])
@@ -253,10 +257,10 @@ class WorkflowGuardTests(unittest.TestCase):
         other = acct(cr.ROLE_SECTION, "緊急救護科", battalion="", unit="緊急救護科")
         for who in (self.sec, other):
             with self.assertRaises(cr.RegistryError) as cm:
-                self.reg.update_stage(who, no, "first_review", {"first_result": "通過"})
+                self.reg.update_stage(who, no, "first_review", _passed_review())
             self.assertIn("所屬大隊", str(cm.exception))
         self.assertEqual(self.reg.get(no).status, "待大隊初審")
-        self.reg.update_stage(self.admin, no, "first_review", {"first_result": "通過"})
+        self.reg.update_stage(self.admin, no, "first_review", _passed_review())
         self.assertEqual(self.reg.get(no).status, "待業務科收件")
         self.assertEqual(self.store.read_log()[-1]["來源"], "管理者覆核")
         self.assertEqual(self.store.read_log()[-1]["帳號"], "民力訓練科")
@@ -341,7 +345,7 @@ class WorkflowGuardTests(unittest.TestCase):
 
     def test_earlier_stage_locks_once_the_next_one_starts(self):
         no = self.reg.submit(self.unit, sample(plan_name="還能改初審"))
-        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "通過"})
+        self.reg.update_stage(self.bn, no, "first_review", _passed_review())
         self.reg.update_stage(self.bn, no, "first_review", {"first_result": "退回分隊修正"}, return_reason="補計畫書")
         self.assertEqual(self.reg.get(no).status, "退回分隊修正")
 
@@ -367,13 +371,13 @@ class WorkflowGuardTests(unittest.TestCase):
         self.assertNotIn(no, [c.case_no for c in self.reg.visible_cases(self.admin)])
         with self.assertRaises(cr.RegistryError):
             self.reg.update_stage(self.admin, no, "reply", {"approve_status": "審核中"})
-        self.reg.update_stage(self.admin, no, "first_review", {"first_result": "通過", "first_by": "代核"})
+        self.reg.update_stage(self.admin, no, "first_review", dict(_passed_review(), first_by="代核"))
         self.assertEqual(self.store.read_log()[-1]["來源"], "管理者覆核")
         self.assertEqual(self.reg.get(no)["first_by"], "代核")
 
     def _receive(self, name):
         no = self.reg.submit(self.unit, sample(plan_name=name))
-        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "通過"})
+        self.reg.update_stage(self.bn, no, "first_review", _passed_review())
         self.reg.update_stage(self.sec, no, "second_review", {"received": True, "apply_doc_no": "1"})
         return no
 
@@ -444,7 +448,7 @@ class ReviewSummaryTests(unittest.TestCase):
         self.reg.update_stage(self.bn, no, "first_review", {"first_result": "退回分隊修正"}, return_reason="補件")
         returned = self.reg.action_cases(self.unit)
         self.assertEqual([c.case_no for c in returned], [no])
-        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "通過"})
+        self.reg.update_stage(self.bn, no, "first_review", _passed_review())
         self.reg.update_stage(self.sec, no, "second_review", {"received": True})
         self.assertEqual([c.case_no for c in self.reg.action_cases(self.sec)], [no])
 
@@ -461,6 +465,27 @@ class ReviewSummaryTests(unittest.TestCase):
         self.assertEqual(calls["n"], 1)
         self.assertEqual(cr.cached_value(cache, "k", 200, 45, loader), ["案件"])
         self.assertEqual(calls["n"], 2)
+
+    def test_passing_first_review_requires_the_checklist(self):
+        no = self.reg.submit(self.unit, sample(plan_name="要勾選"), source="手動填寫")
+        with self.assertRaises(cr.RegistryError) as cm:
+            self.reg.update_stage(self.bn, no, "first_review",
+                                  {"first_result": "通過", "review_checks": [k for k, _ in cr.REVIEW_CHECKS]})
+        self.assertIn("退回分隊修正", str(cm.exception))
+        self.reg.update_stage(self.bn, no, "first_review", _passed_review())
+        saved = self.reg.submission_detail(no)["review_checks"]
+        self.assertIn("wording", saved)
+        main = "".join(self.store.rows[self.reg.get(no).row_no - 1])
+        self.assertNotIn("wording", main)
+        self.assertIn("初審勾選", self.store.read_log()[-1]["異動內容"])
+
+    def test_generator_case_only_needs_the_five_checks(self):
+        no = self.reg.submit(self.unit, sample(plan_name="產生器案"), source="計畫產生器")
+        self.assertTrue(self.reg.submitted_by_generator(no))
+        self.reg.update_stage(self.bn, no, "first_review",
+                              {"first_result": "通過", "review_checks": [k for k, _ in cr.REVIEW_CHECKS]})
+        self.assertEqual(self.reg.get(no)["first_result"], "通過")
+        self.assertEqual(cr.one_month_before(date(2026, 10, 24)), date(2026, 9, 24))
 
     def test_account_menu_label(self):
         self.assertEqual(cr.account_menu_label(acct(cr.ROLE_BATTALION, "關山大隊", battalion="關山大隊", unit="")),

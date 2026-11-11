@@ -400,6 +400,9 @@ class PlanContext:
     org_unit: str = ""       # 登入帳號的分隊；大隊帳號留空
     award_basis: str = ""    # amount / days / custom / none；空白＝有填敘獎額度就是 custom，否則不敘獎
     case_no: str = ""        # 登錄案件管制後取得的案號，會印在計畫書、概算表、陳報單上
+    procurement_basis: str = ""
+    equipment_quote: bool = False
+    equipment_review_form: bool = False
 
     # ---- 衍生值
     def __post_init__(self):
@@ -553,6 +556,41 @@ RULE_EQUIPMENT = "錯誤樣態「設備類案件缺廠商估價單或縣府審�
 RULE_PERSONAL_GEAR = "常見問答「活動費用用於採購服裝」；設備工程類捐助款不得支應採購個人服裝及裝備"
 RULE_EQUIPMENT_KIND = "注意要點「計畫書命名（設備類）」；設備類為購置設備（資本門）"
 PERSONAL_GEAR_WORDS = ("服裝", "制服", "個人裝備", "外套", "T恤", "鞋")
+# 先拿掉共同防護具與家具，再看剩下的字，避免「救生衣」「安全帽」「衣架」被當成個人服裝。
+_CLOTHING_SAFE = ("救生衣", "防火衣", "消防衣", "防護衣", "防焰衣", "潛水衣", "雨衣", "救災衣",
+                  "防護鞋", "安全鞋", "安全帽", "頭盔", "鋼帽", "衣架", "衣櫃", "衣帽架")
+PROCUREMENT_EXAMPLE = (
+    "本案經費概算計新台幣20萬元整，因行程規劃需至不同地點（○○縣、○○市）用餐及住宿，"
+    "本案適用政府採購法施行細則第13條規定：「所需採購項目各屬不同標的、不同施工或供應地區、"
+    "不同需求條件或不同行業廠商之專業項目所分別辦理者」，擬採「分別採購」方式辦理，"
+    "且各類項目金額均未達15萬元，依政府採購法第23條、中央機關未達公告金額採購招標辦法第5條規定，"
+    "逕向各相關廠商辦理採購。"
+)
+
+
+def personal_clothing_words(name):
+    """個人服裝用字。救生衣、防火衣、安全帽、衣架等先扣除，避免誤判。"""
+    text = str(name or "")
+    for phrase in sorted(_CLOTHING_SAFE, key=len, reverse=True):
+        text = text.replace(phrase, "")
+    found = []
+    for word in ("制服", "外套", "便服", "便衣", "襯衫", "長褲", "短褲", "褲子", "皮鞋", "球鞋", "布鞋", "便鞋"):
+        if word in text:
+            found.append(word)
+    for ch in ("衣", "褲", "鞋", "帽"):
+        if ch in text:
+            found.append(ch)
+    return found
+
+
+def fuel_is_lumped(item):
+    """油資、過路費、停車費寫進其他品項或雜支，而不是獨立一列。"""
+    if not _no_subsidy_words(item):
+        return False
+    name = str(item.get("name") or "").strip()
+    if str(item.get("kind") or "") == "雜支":
+        return True
+    return name not in ("油資", "過路費", "停車費")
 RULE_NO_SUBSIDY = "縣府核定函：「油資、過路費、停車費」不予補助"
 RULE_MEAL_QTY = ("編列原則「名冊人數需與便當、物品數量合理對應」；工作人員名冊若為 30 人，便當不應無故暴增至 100 多份，"
                  "需於備註欄清楚註明數量來源與用途")
@@ -914,16 +952,30 @@ def check_plan(ctx, today=None):
         f.append(Finding(OK, "二代健保補充保費全數由自籌款支應", "這類項目不分配補助款。"))
     equip = [i for i in ctx.items if i["kind"] == "設備購置"]
     if ctx.plan_type == "equipment":
-        gear_hit = {w for i in ctx.items for w in PERSONAL_GEAR_WORDS if w in (i["name"] or "")}
-        clothing = [i["name"] or "（未命名）" for i in ctx.items if any(w in (i["name"] or "") for w in PERSONAL_GEAR_WORDS)]
+        clothing = []
+        gear_hit = set()
+        for item in ctx.items:
+            hits = personal_clothing_words(item.get("name"))
+            if hits:
+                clothing.append(item.get("name") or "（未命名）")
+                gear_hit.update(hits)
         if clothing:
             f.append(_issue(
-                WARN, "設備類不得採購個人服裝及裝備",
-                "、".join(clothing) + "：設備工程類捐助款不得支應個人服裝及裝備，裝備類應以共同裝備為宜。",
+                ERROR, "設備類不得採購個人服裝",
+                "、".join(clothing) + "：制服、外套、衣褲鞋帽等個人服裝不能用設備類補助。救生衣、防火衣、消防衣、安全帽、安全鞋等共同防護裝備不在此限。",
                 rule=RULE_PERSONAL_GEAR,
                 where=_budget_where(clothing),
                 comparison="品項名稱含：" + "、".join(sorted(gear_hit)),
-                suggestion="請改列共同使用的裝備；個人服裝請改走活動類（且單價不得達資本門標準 1 萬元）。",
+                suggestion="請刪除個人服裝，或改為共同使用的防護裝備。",
+            ))
+        if not getattr(ctx, "equipment_quote", False) or not getattr(ctx, "equipment_review_form", False):
+            f.append(_issue(
+                ERROR, "設備類定稿前要確認估價單與縣府審核表",
+                "請勾選已備妥廠商估價單，以及縣政府設備類申請審核表。",
+                rule=RULE_EQUIPMENT,
+                where="應檢附文件",
+                comparison="估價單或縣府審核表尚未確認",
+                suggestion="備妥兩份文件並在畫面上勾選後才能定稿。",
             ))
         not_equip = [i["name"] or "（未命名）" for i in ctx.items if i["kind"] in MEAL_KINDS]
         if not_equip:
@@ -955,41 +1007,54 @@ def check_plan(ctx, today=None):
             suggestion="僅限具法源依據且須核發專業證照的訓練；其餘課程請刪除該項。",
         ))
     if total > PROCUREMENT_THRESHOLD:
-        f.append(_issue(
-            WARN, "總經費超過 15 萬元",
-            "陳報單須敘明採購法依據並加會政風室，不可拆分發包。本產生器目前不處理這類案件，請另洽承辦人。",
-            rule=RULE_PROCUREMENT,
-            where="總經費",
-            comparison=f"總經費 {money(total)} 元，門檻 {money(PROCUREMENT_THRESHOLD)} 元",
-            suggestion="陳報單須敘明採購法依據並加會政風室，不可拆分發包。本產生器不處理這類案件，請另洽承辦人。",
-        ))
+        basis = str(getattr(ctx, "procurement_basis", "") or "").strip()
+        if not basis:
+            f.append(_issue(
+                ERROR, "總經費超過 15 萬元，尚未填寫採購法依據",
+                "請填寫採購法依據。填了之後會寫進陳報單，並自動把政風室加入敬會。",
+                rule=RULE_PROCUREMENT,
+                where="採購法依據",
+                comparison=f"總經費 {money(total)} 元，超過 {money(PROCUREMENT_THRESHOLD)} 元，依據空白",
+                suggestion="請填寫採購法依據（可沿用畫面帶入的分別採購例句）後再定稿。",
+            ))
+        else:
+            f.append(Finding(OK, "總經費超過 15 萬元，已填寫採購法依據", "敬會會自動加上政風室。"))
 
     # 9. 品項名稱：避免「贈品」
     gifts = [i["name"] or "（未命名）" for i in ctx.items if "贈品" in (i["name"] or "")]
     if gifts:
         f.append(_issue(
-            WARN, "品項名稱使用「贈品」",
-            "建議依性質改列「宣導品」；若是有獎徵答再改列「獎品」。項目：" + "、".join(gifts) + "。",
+            ERROR, "品項名稱使用「贈品」",
+            "不能定稿。請依性質改列「宣導品」；若是有獎徵答再改列「獎品」。項目：" + "、".join(gifts) + "。",
             rule=RULE_GIFT,
             where=_budget_where(gifts),
             comparison="品項名稱含「贈品」：" + "、".join(gifts),
-            suggestion="請依性質改列「宣導品」；若是有獎徵答再改列「獎品」。",
+            suggestion="請改列「宣導品」；若是有獎徵答再改列「獎品」。",
         ))
 
     # 9b. 油資、過路費、停車費不予補助（品項名稱含這些字的項目全數列為自籌）
     fuel_items = [i for i in ctx.items if _no_subsidy_words(i)]
-    if fuel_items:
-        names = [i["name"] for i in fuel_items]
-        bundled = [i["name"] for i in fuel_items if "含" in i["name"]]
-        extra = ("「" + "」「".join(bundled) + "」把這些費用併在其他費用裡，整項都被列為自籌；"
-                 "請拆成「（不含油資、過路費、停車費）的費用」與獨立的油資、過路費、停車費品項。") if bundled else ""
+    lumped = [i for i in fuel_items if fuel_is_lumped(i)]
+    alone = [i for i in fuel_items if not fuel_is_lumped(i)]
+    if lumped:
+        names = [i["name"] or "（未命名）" for i in lumped]
         f.append(_issue(
-            WARN, "有油資、過路費或停車費品項，縣府不予補助",
-            "、".join(names) + "：已全數列為自籌款，不分配補助款。" + extra,
+            ERROR, "油資、過路費或停車費不可併在其他費用或雜支",
+            "、".join(names) + "。請拆成獨立品項（油資、過路費、停車費各自一列，全數自籌），其餘費用的名稱不要再寫這些字。",
             rule=RULE_NO_SUBSIDY,
             where=_budget_where(names),
-            comparison="品項名稱含：" + "、".join(sorted({w for i in fuel_items for w in _no_subsidy_words(i)})),
-            suggestion="這些費用須由自籌款支應；若已含在遊覽車租金等品項內，請拆成獨立品項，租車費備註註明不含這些費用。",
+            comparison="這些品項把不予補助的費用併進其他費用或雜支",
+            suggestion="拆成獨立的油資、過路費、停車費，並從遊覽車租金等名稱拿掉「含油資」。",
+        ))
+    if alone:
+        names = [i["name"] for i in alone]
+        f.append(_issue(
+            WARN, "有油資、過路費或停車費品項，縣府不予補助",
+            "、".join(names) + "：已全數列為自籌款，不分配補助款。",
+            rule=RULE_NO_SUBSIDY,
+            where=_budget_where(names),
+            comparison="品項名稱含：" + "、".join(sorted({w for i in alone for w in _no_subsidy_words(i)})),
+            suggestion="這些費用須由自籌款支應。",
         ))
 
     # 10. 備註欄
@@ -1714,7 +1779,10 @@ def default_meet(ctx):
 
 
 def meet_text(ctx):
-    return ctx.meet.strip() or default_meet(ctx)
+    text = ctx.meet.strip() or default_meet(ctx)
+    if ctx.total > PROCUREMENT_THRESHOLD and "政風室" not in text:
+        text = (text + "、政風室") if text else "政風室"
+    return text
 
 
 def submission_body(ctx):
@@ -1730,7 +1798,11 @@ def submission_body(ctx):
     third = "三、檢陳相關資料附件如下：\n" + "\n".join(
         (f"　（{_CN_PLAIN[n]}）{x}" if n < len(_CN_PLAIN) else f"　（{n + 1}）{x}") + "。"
         for n, x in enumerate(submission_attachments(ctx)))
-    out = [first, _fund_sentence(ctx), third]
+    fund = _fund_sentence(ctx)
+    basis = str(getattr(ctx, "procurement_basis", "") or "").strip()
+    if basis:
+        fund += "\n" + basis
+    out = [first, fund, third]
     award = award_text(ctx)
     if award:
         out.append("四、獎懲：" + award)
@@ -2047,6 +2119,9 @@ def context_from_inputs(data, plan_type="training"):
         background=data.get("background", ""),
         purpose=data.get("purpose", ""),
         rules=data.get("rules", ""),
+        procurement_basis=data.get("procurement_basis", ""),
+        equipment_quote=bool(data.get("equipment_quote", plan_type == "equipment" and data.get("key"))),
+        equipment_review_form=bool(data.get("equipment_review_form", plan_type == "equipment" and data.get("key"))),
     )
 
 
