@@ -142,8 +142,9 @@ class NoSubsidyWordsTests(unittest.TestCase):
              "price": 15000, "use": "往返交通"},
             {"name": "住宿", "kind": "一般", "qty": 20, "unit": "間", "price": 3000, "use": "住宿"},
         ], subsidy=60000)
-        warn = [f for f in pg.check_plan(ctx, today=TODAY) if "油資、過路費或停車費" in f.title]
+        warn = [f for f in pg.check_plan(ctx, today=TODAY) if "不可併在其他費用" in f.title]
         self.assertEqual(len(warn), 1)
+        self.assertEqual(warn[0].level, pg.ERROR)
         self.assertIn("拆成", warn[0].detail)
         self.assertEqual(ctx.items[0]["subsidy"], 0)
         self.assertEqual(ctx.items[1]["subsidy"], 60000)
@@ -206,10 +207,15 @@ class HistoricalCaseTests(unittest.TestCase):
             self.assertNotIn("沒有課程表", _titles(pg.check_plan(ctx, today=TODAY)), key)
 
 
-    def test_honor_case_over_150k_gets_procurement_warning_only(self):
+    def test_honor_case_over_150k_needs_procurement_basis(self):
         ctx = pg.case_context("honor", TODAY)
-        findings = pg.check_plan(ctx, today=TODAY)
-        self.assertIn("總經費超過 15 萬元", _titles(findings, pg.WARN))
+        self.assertTrue(ctx.procurement_basis)
+        self.assertNotIn("尚未填寫採購法依據", _titles(pg.check_plan(ctx, today=TODAY), pg.ERROR))
+        self.assertIn("政風室", pg.meet_text(ctx))
+        self.assertIn(ctx.procurement_basis, "\n".join(pg.submission_body(ctx)))
+        empty = pg.case_context("honor", TODAY)
+        empty.procurement_basis = ""
+        self.assertIn("總經費超過 15 萬元，尚未填寫採購法依據", _titles(pg.check_plan(empty, today=TODAY), pg.ERROR))
         self.assertEqual(ctx.courses, [])
 
     def test_study_and_culture_cases_have_schedules(self):
@@ -380,9 +386,13 @@ class MultiSourceAndEquipmentTests(unittest.TestCase):
             {"name": "個人制服", "kind": "設備購置", "qty": 1, "unit": "件", "price": 1000, "use": "x"},
             {"name": "便當", "kind": "餐費", "qty": 1, "unit": "份", "price": 100, "use": "x"},
         ]
-        titles = _titles(pg.check_plan(pg.context_from_inputs(data, "equipment"), today=TODAY), pg.WARN)
-        self.assertIn("設備類不得採購個人服裝及裝備", titles)
-        self.assertIn("設備類概算表出現餐費或紀念品", titles)
+        findings = pg.check_plan(pg.context_from_inputs(data, "equipment"), today=TODAY)
+        self.assertIn("設備類不得採購個人服裝", _titles(findings, pg.ERROR))
+        self.assertIn("設備類概算表出現餐費或紀念品", _titles(findings, pg.WARN))
+        safe = pg.case_inputs("equip_rescue", TODAY)
+        safe["items"].append({"name": "救生衣", "kind": "設備購置", "qty": 2, "unit": "件", "price": 800, "use": "水域訓練共同使用"})
+        safe_hit = pg.check_plan(pg.context_from_inputs(safe, "equipment"), today=TODAY)
+        self.assertNotIn("設備類不得採購個人服裝", _titles(safe_hit, pg.ERROR))
 
     def test_equipment_docx_and_xlsx_have_no_schedule(self):
         from docx import Document

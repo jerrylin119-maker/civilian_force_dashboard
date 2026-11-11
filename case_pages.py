@@ -276,6 +276,19 @@ def _progress_input(label, current, choices, normalize, canonical):
     return picked
 
 
+def _review_hints(case, detail):
+    lines = [f"案件編號：{case.case_no}（請核對紙本計畫與陳報單是否寫上這個案號）"]
+    head = cr._clean(detail.get("headcount"))
+    lines.append(f"系統人數：{head}" if head else "系統沒有登錄人數，請對紙本名冊自行清點。")
+    start = cr._parse_date(case["date_start"])
+    if start:
+        due = cr.one_month_before(start)
+        lines.append(f"活動日 {case['date_start']}，活動前 1 個月是 {due.year}年{due.month}月{due.day}日。請確認紙本是否在這天以前送達。")
+    else:
+        lines.append("這件案子沒有活動日期（設備類或未填），送件期限請自行判斷。")
+    return lines
+
+
 def _stage_form(reg, acct, case, stage, expanded):
     widgets = STAGE_WIDGETS[stage]
     with st.expander(cr.STAGE_LABELS[stage], expanded=expanded):
@@ -283,6 +296,20 @@ def _stage_form(reg, acct, case, stage, expanded):
             st.caption("您正在以民力訓練科權限修改。儲存後會記入異動紀錄，來源為「管理者覆核」。只改這個階段，不會自動清掉後面已填的欄位。")
         with st.form(f"stage_{stage}_{case.case_no}"):
             vals = {}
+            review_checked = None
+            if stage == "first_review":
+                manual = not reg.submitted_by_generator(case.case_no)
+                detail = reg.submission_detail(case.case_no) or {}
+                saved = set(detail.get("review_checks") or [])
+                if manual:
+                    st.warning("非產生器定稿，請逐項審")
+                for line in _review_hints(case, detail):
+                    st.caption(line)
+                review_checked = []
+                for key, label in cr.review_items(manual):
+                    if st.checkbox(label, value=key in saved):
+                        review_checked.append(key)
+                st.caption("要選「通過」，上面每一項都要勾。沒勾的請改選「退回分隊修正」並寫原因。")
             for key, label, kind, opts in widgets:
                 cur = case[key]
                 if kind == "select":
@@ -301,6 +328,8 @@ def _stage_form(reg, acct, case, stage, expanded):
                     vals[key] = st.text_input(label, value=default)
             go = st.form_submit_button("儲存")
         if go:
+            if review_checked is not None:
+                vals["review_checks"] = review_checked
             try:
                 diff = reg.update_stage(acct, case.case_no, stage, vals)
             except cr.RegistryError as exc:
@@ -347,6 +376,12 @@ def _render_submission_summary(reg, acct, case):
             st.markdown(f"- {name}")
     else:
         st.markdown("- 沒有一併登錄的附件清單。紙本仍請附計畫書與概算表。")
+    saved = detail.get("review_checks") or []
+    if saved:
+        labels = dict(cr.review_items(True))
+        st.markdown("**大隊初審勾選**")
+        for key in saved:
+            st.markdown(f"- {labels.get(key, key)}")
     history = [r for r in reg.visible_log(acct) if r.get("案件編號") == case.case_no]
     st.markdown("**異動紀錄**")
     if history:

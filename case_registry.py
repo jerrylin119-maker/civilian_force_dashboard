@@ -26,7 +26,24 @@ LOG_SHEET_NAME = "異動紀錄"
 LOG_HEADERS = ["時間", "案件編號", "帳號", "角色", "階段", "異動內容", "來源"]
 # 項目明細、附件、聯絡人備註不放進案件主表（欄位要跟表單回應一致）。另開這張小表。
 DETAIL_SHEET_NAME = "案件內容"
-DETAIL_HEADERS = ["案件編號", "聯絡人", "項目明細", "附件", "備註", "更新時間"]
+DETAIL_HEADERS = ["案件編號", "聯絡人", "項目明細", "附件", "備註", "更新時間", "人數", "初審勾選"]
+
+# 大隊②初審必勾。手動登錄再加產生器才會擋的項目。
+REVIEW_CHECKS = (
+    ("suggest_form", "議員或公所建議表的名稱、統編、用印"),
+    ("split_sources", "兩種補助來源有沒有誤併成一案"),
+    ("lead_time", "送件是否還趕得上「活動前 1 個月」"),
+    ("roster", "參加人員名冊有沒有附上，人數和系統一不一致"),
+    ("case_no_on_paper", "案號有沒有寫回紙本計畫和陳報單"),
+)
+MANUAL_EXTRA_CHECKS = (
+    ("wording", "計畫名稱或內容沒有「聯誼、餐敘、聯歡、健身」"),
+    ("award_in_plan", "計畫書內沒有寫獎勵或敘獎額度"),
+    ("budget_rules", "自籌 30%、餐費紀念品 50%、雜支 5%，且補助不大於總經費"),
+    ("nhi_capital", "二代健保沒有用補助款，活動類沒有併入設備購置"),
+    ("item_note", "每個品項都有用途說明"),
+    ("schedule_qty", "需要課程表的活動已列出，便當人數對得起來或已註明來源"),
+)
 
 # ---------------------------------------------------------------- 角色與階段
 ROLE_UNIT = "unit"            # 分隊承辦人
@@ -140,7 +157,8 @@ FIELD_LABELS.update({"first_result": "初審結果", "first_by": "初審人員",
                      "settle_first_by": "核銷初審人員", "settle_doc_no": "核銷發文字號",
                      "apply_doc_no": "申請發文字號", "approve_status": "核准進度", "approve_no": "核准案號",
                      "approve_amount": "核准金額", "letter_back": "核准函回寄", "applied": "爭取經費",
-                     "total": "總經費", "source_detail": "來源細項", "return_reason": "退回原因"})
+                     "total": "總經費", "source_detail": "來源細項", "return_reason": "退回原因",
+                     "review_checks": "初審勾選"})
 
 
 def _norm_header(text):
@@ -333,6 +351,17 @@ def decode_items(text):
         out.append({"name": parts[0], "qty": parts[1], "unit": parts[2],
                     "price": parts[3], "total": parts[4], "remark": parts[5]})
     return out
+
+
+def review_items(manual):
+    """手動登錄要多勾產生器會擋下的項目。"""
+    return REVIEW_CHECKS + (MANUAL_EXTRA_CHECKS if manual else ())
+
+
+def one_month_before(day):
+    """活動開始日的前一個日曆月（不含另外再減 7 天）。"""
+    from plan_generator import add_months
+    return add_months(day, -1)
 
 
 def submission_brief(case, detail=None):
@@ -858,6 +887,8 @@ class CaseRegistry:
             "\n".join(_clean(x) for x in (detail.get("attachments") or []) if _clean(x)),
             _clean(detail.get("note")),
             now_text(),
+            _clean(detail.get("headcount")),
+            _clean(detail.get("review_checks")),
         ]
         try:
             rows = self.store.read_tab(DETAIL_SHEET_NAME)
@@ -887,8 +918,37 @@ class CaseRegistry:
                 "items": decode_items(pad[2]),
                 "attachments": [x for x in _clean(pad[3]).splitlines() if x.strip()],
                 "note": _clean(pad[4]),
+                "headcount": _clean(pad[6]) if len(pad) > 6 else "",
+                "review_checks": [x for x in _clean(pad[7]).splitlines() if x.strip()] if len(pad) > 7 else [],
             }
         return None
+
+    def submitted_by_generator(self, case_no):
+        for row in reversed(self.store.read_log(500)):
+            if (row.get("案件編號") or "") != case_no:
+                continue
+            if row.get("階段") == STAGE_LABELS["submit"] and "計畫產生器" in (row.get("來源") or ""):
+                return True
+        return False
+
+    def save_review_checks(self, case_no, checked):
+        text = "\n".join(_clean(x) for x in (checked or []) if _clean(x))
+        try:
+            rows = self.store.read_tab(DETAIL_SHEET_NAME)
+            if not rows:
+                blank = [""] * len(DETAIL_HEADERS)
+                blank[0], blank[5], blank[7] = case_no, now_text(), text
+                self.store.append_tab_rows(DETAIL_SHEET_NAME, DETAIL_HEADERS, [blank])
+                return
+            for i, existing in enumerate(rows[1:], start=2):
+                if existing and _clean(existing[0]) == case_no:
+                    self.store.update_tab_cells(DETAIL_SHEET_NAME, i, {5: now_text(), 7: text})
+                    return
+            blank = [""] * len(DETAIL_HEADERS)
+            blank[0], blank[5], blank[7] = case_no, now_text(), text
+            self.store.append_tab_rows(DETAIL_SHEET_NAME, DETAIL_HEADERS, [blank])
+        except Exception:
+            self.detail_failed = True
 
     detail_failed = False
 
@@ -904,6 +964,9 @@ class CaseRegistry:
             return_reason = changes.pop("return_reason")
         else:
             changes.pop("return_reason", None)
+        review_checks = changes.pop("review_checks", None)
+        if isinstance(review_checks, str):
+            review_checks = [x for x in review_checks.splitlines() if x.strip()]
         admin = bool(getattr(account, "is_admin", False))
         if stage_is_locked(case, stage) and not admin:
             raise RegistryError(
@@ -957,6 +1020,13 @@ class CaseRegistry:
                 reason = _clean(return_reason).replace("；", "、").replace(";", "、")
                 if not reason:
                     raise RegistryError("退回分隊修正時必須填寫退回原因")
+        if stage == "first_review" and clean.get("first_result") == "通過":
+            manual = not self.submitted_by_generator(case_no)
+            missing = [label for key, label in review_items(manual) if key not in set(review_checks or [])]
+            if missing:
+                raise RegistryError("尚有未勾選項目，請改選「退回分隊修正」並填寫原因：" + "、".join(missing))
+        if stage == "first_review" and review_checks is not None:
+            self.save_review_checks(case_no, review_checks)
         if stage == "second_review" and clean.get("received") == "TRUE":
             if not clean.get("received_at"):
                 clean["received_at"] = now_text()
@@ -967,6 +1037,9 @@ class CaseRegistry:
         log_changes = {k: f"{_clean(before[k])} → {v}" for k, v in diff.items()}
         if reason:
             log_changes["return_reason"] = reason
+        if stage == "first_review" and review_checks is not None:
+            labels = dict(review_items(True))
+            log_changes["review_checks"] = "、".join(labels.get(k, k) for k in review_checks) or "（未勾）"
         if not log_changes:
             return {}
         if diff:
@@ -1108,4 +1181,5 @@ def plan_detail(ctx, officer=""):
         "items": items,
         "attachments": list(submission_attachments(ctx)),
         "note": _clean(getattr(ctx, "background", "")),
+        "headcount": _clean(getattr(ctx, "headcount", "")),
     }

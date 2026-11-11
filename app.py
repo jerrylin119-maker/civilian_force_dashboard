@@ -2006,7 +2006,8 @@ def _render_plan_generator_inner():
             )
         else:
             awards_df = st.session_state["plan_awards"].iloc[0:0]
-        meet = st.text_input("敬會單位（留空則依計畫類型自動帶入）", key=f"plan_meet_{ver}",
+        meet = st.text_input("敬會單位（留空則依計畫類型自動帶入；總經費超過 15 萬元會自動加上政風室）",
+                             key=f"plan_meet_{ver}",
                              placeholder="例：災害搶救科、民力運用及訓練科、人事室、會計室")
 
     def _rows(df, mapping):
@@ -2014,6 +2015,23 @@ def _render_plan_generator_inner():
         for r in df.to_dict("records"):
             out.append({k: r.get(v) for k, v in mapping.items()})
         return out
+
+    equip_quote = equip_form = False
+    if is_equip:
+        st.markdown("**設備類定稿前必備**")
+        equip_quote = st.checkbox("已備妥廠商估價單", key=f"plan_eq_quote_{ver}")
+        equip_form = st.checkbox("已備妥縣政府設備類申請審核表", key=f"plan_eq_form_{ver}")
+    procurement = ""
+    rough_total = 0
+    try:
+        rough_total = sum(float(r.get("數量") or 0) * float(r.get("單價") or 0) for r in items_df_eff.to_dict("records"))
+    except Exception:
+        rough_total = 0
+    if rough_total > pg.PROCUREMENT_THRESHOLD:
+        pkey = f"plan_procure_{ver}"
+        if pkey not in st.session_state:
+            st.session_state[pkey] = pg.PROCUREMENT_EXAMPLE
+        procurement = st.text_area("採購法依據（總經費超過 15 萬元必填，會寫進陳報單）", key=pkey, height=160)
 
     items = pg.normalize_items(
         _rows(items_df_eff, {"name": "品名輸出", "kind": "類別", "qty": "數量", "unit": "單位", "price": "單價",
@@ -2029,6 +2047,9 @@ def _render_plan_generator_inner():
         awards=[{"role": r.get("職務"), "count": r.get("人數"), "kind": r.get("種類"), "times": r.get("次數")}
                 for r in awards_df.to_dict("records")],
         meet=meet, award_basis=award_basis,
+        procurement_basis=procurement,
+        equipment_quote=bool(equip_quote),
+        equipment_review_form=bool(equip_form),
         case_no=(st.session_state.get(f"plan_regd_{ver}") or {}).get("case_no", ""),
         org_battalion=acct.battalion if acct is not None else "",
         org_unit=acct.unit if (acct is not None and acct.role == "unit") else "")

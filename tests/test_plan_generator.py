@@ -210,7 +210,7 @@ class WordingTests(unittest.TestCase):
             {"name": "場地", "kind": "一般", "qty": 1, "price": 30000, "use": "場地"},
         ], subsidy=10000)
         hit = _levels(pg.check_plan(ctx, today=TODAY), "贈品")
-        self.assertEqual(hit[0].level, pg.WARN)
+        self.assertEqual(hit[0].level, pg.ERROR)
         self.assertIn("宣導品", hit[0].detail)
         self.assertIn("獎品", hit[0].detail)
 
