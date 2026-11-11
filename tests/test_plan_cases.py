@@ -42,7 +42,7 @@ class ActivityTypeTests(unittest.TestCase):
         self.assertIn("activity", pg.PLAN_TYPES)
         self.assertEqual(pg.PLAN_TYPES["training"]["audience_label"], "參訓對象")
         self.assertEqual(pg.PLAN_TYPES["activity"]["audience_label"], "參加對象")
-        self.assertEqual(pg.MODULE_REVISION, 11)
+        self.assertEqual(pg.MODULE_REVISION, 12)
 
     def test_activity_sections_use_activity_wording_and_skip_award(self):
         ctx = _activity(purpose="表彰績優人員", method="（一）績優表揚。\n（二）頒獎。")
@@ -257,25 +257,30 @@ class HistoricalCaseTests(unittest.TestCase):
         self.assertEqual(len(pg.case_inputs("honor", TODAY)["items"]), 8)
 
     def test_submission_form_same_wording_for_activity_and_training(self):
-        """陳報單句型相同，只有計畫名稱與檢陳文件不同；預訂日期地點寫在第一點；不得出現敘獎額度。"""
+        """申請陳報單句型相同：案由檢陳計畫名稱，內容不編號、不含檢陳附件，預設不敘獎。"""
         for key in CASE_KEYS:
             ctx = pg.case_context(key, TODAY)
             subject = pg.submission_subject(ctx)
             body = pg.submission_body(ctx)
             joined = "".join(body)
-            self.assertIn(pg.plan_full_name(ctx), subject)
-            self.assertIn("乙案，請鑒核", subject)
-            self.assertIn("「" + pg.plan_full_name(ctx) + "」", subject)
-            if ctx.plan_type != "equipment":
-                self.assertIn(ctx.date_text, body[0])
-                self.assertIn(ctx.place.strip(), body[0])
-            self.assertIn("建請鈞長同意辦理申請補助款事宜", body[1])
-            self.assertIn(f"新臺幣{pg.to_cn_amount(ctx.total)}元整", body[1])
-            self.assertIn("檢陳相關資料附件如下", body[2])
-            self.assertIn("計畫", body[2])
-            self.assertNotIn("嘉獎", joined)
-            self.assertNotIn("人事室", pg.meet_text(ctx))
-            self.assertGreater(len(pg.build_submission_docx(ctx)), 2000)
+            self.assertTrue(subject.startswith("檢陳"), key)
+            self.assertTrue(subject.endswith("，請鑒核。"), key)
+            self.assertIn(f"辦理「{ctx.title2}」", subject, key)
+            self.assertNotIn("乙案", subject, key)
+            self.assertIn(f"辦理「{ctx.title2}」", body[0], key)
+            if ctx.start and ctx.end:
+                self.assertIn("爰訂於", body[0], key)
+                self.assertIn(ctx.date_text, body[0], key)
+            if ctx.plan_type != "equipment" and not ctx.background.strip():
+                self.assertIn(ctx.place.strip(), body[0], key)
+            self.assertIn("本案總經費計新臺幣", body[1], key)
+            self.assertIn(f"新臺幣{pg.wan_yuan(ctx.total)}", body[1], key)
+            self.assertIn("建請鈞長同意辦理", body[1], key)
+            self.assertNotIn("檢陳相關資料", joined, key)
+            self.assertNotIn("一、", body[0], key)
+            self.assertNotIn("嘉獎", joined, key)
+            self.assertNotIn("人事室", pg.meet_text(ctx), key)
+            self.assertGreater(len(pg.build_submission_docx(ctx)), 2000, key)
 
     def test_submission_form_without_self_fund_omits_rest_clause(self):
         ctx = pg.case_context("env_study", TODAY)
@@ -284,11 +289,14 @@ class HistoricalCaseTests(unittest.TestCase):
         self.assertNotIn("不足部分", pg.fund_text(ctx))
         ctx = pg.case_context("honor", TODAY)
         self.assertIn("其餘新臺幣", "".join(pg.submission_body(ctx)))
-        self.assertIn("自籌款支應", pg.submission_body(ctx)[1])
+        self.assertIn(f"由{ctx.unit.strip()}自籌", pg.submission_body(ctx)[1])
+        self.assertNotIn("自籌款支應", pg.submission_body(ctx)[1])
 
     def test_training_submission_lists_safety_checklist_and_default_meet(self):
         ctx = pg.case_context("rehab_bls", TODAY)
-        self.assertIn("訓練安全計畫與檢核表", pg.submission_body(ctx)[2])
+        self.assertIn("訓練安全計畫與檢核表1份", pg.submission_attachments(ctx))
+        self.assertNotIn("檢陳", "".join(pg.submission_body(ctx)))
+        self.assertIn("爰訂於" + ctx.date_text + "8時至18時辦理", pg.submission_body(ctx)[0])
         self.assertEqual(pg.meet_text(ctx), "災害搶救科、綜合企劃及安全衛生科、民力運用及訓練科、會計室")
 
 
@@ -323,11 +331,16 @@ class MultiSourceAndEquipmentTests(unittest.TestCase):
         self.assertIn("林議員建議縣府補助新臺幣參萬元整", fund)
         self.assertIn("卑南鄉公所陳代表建議卑南鄉公所補助新臺幣貳萬元整", fund)
         body = pg.submission_body(ctx)
-        self.assertIn("新臺幣參萬元整由本縣縣議會林議員建議本縣縣府補助經費項下支應", body[1])
-        self.assertIn("新臺幣貳萬元整由卑南鄉公所陳代表建議卑南鄉公所補助經費項下支應", body[1])
-        self.assertIn("臺東縣議員建議補助活動類案件建議表1份", body[2])
-        self.assertIn("卑南鄉代表建議補助活動類案件建議表1份", body[2])
-        self.assertTrue(pg.submission_subject(ctx).endswith("乙案，請鑒核。"))
+        self.assertIn("由本縣林議員補助本局辦理", body[1])
+        self.assertIn("計新臺幣3萬元", body[1])
+        self.assertIn("。由卑南鄉公所補助本局辦理", body[1])
+        self.assertIn("計新臺幣2萬元", body[1])
+        self.assertLess(body[1].find("林議員"), body[1].find("卑南鄉公所"))
+        self.assertIn("臺東縣議員建議補助活動類案件建議表1份", pg.submission_attachments(ctx))
+        self.assertIn("卑南鄉代表建議補助活動類案件建議表1份", pg.submission_attachments(ctx))
+        self.assertNotIn("檢陳相關資料", "".join(body))
+        self.assertTrue(pg.submission_subject(ctx).startswith("檢陳"))
+        self.assertTrue(pg.submission_subject(ctx).endswith("，請鑒核。"))
 
     def test_single_source_keeps_old_wording(self):
         ctx = pg.case_context("honor", TODAY)
@@ -347,9 +360,11 @@ class MultiSourceAndEquipmentTests(unittest.TestCase):
     def test_awards_add_clause_and_personnel_office(self):
         ctx = self._mixed()
         body = pg.submission_body(ctx)
-        self.assertTrue(body[3].startswith("四、獎懲：辦理本案出（不）力人員依規定獎（懲）勵，敘獎額度如下："))
-        self.assertIn("（一）大隊督辦人員（2名）嘉獎1次。", body[3])
-        self.assertIn("（二）分隊承辦人員（1名）嘉獎2次。", body[3])
+        self.assertEqual(len(body), 3)
+        self.assertTrue(body[2].startswith("為激勵案內辛勞人員"))
+        self.assertIn("大隊督辦人員2名嘉獎1次", body[2])
+        self.assertIn("分隊承辦人員1名嘉獎2次", body[2])
+        self.assertNotIn("四、獎懲", body[2])
         self.assertIn("人事室", pg.meet_text(ctx))
         self.assertNotIn("嘉獎", pg.markdown_preview(ctx))
         self.assertEqual(pg.normalize_awards([{"role": "", "count": 1, "times": 1}, {"role": "x", "count": 0, "times": 1}]), [])
@@ -367,9 +382,11 @@ class MultiSourceAndEquipmentTests(unittest.TestCase):
         self.assertNotIn("餐費、宣導品及紀念品未超過總經費 50%", titles)
         self.assertNotIn("沒有課程表", titles)
         body = pg.submission_body(ctx)
-        self.assertIn("估價單2份", body[2])
-        self.assertIn("審核表1份", body[2])
-        self.assertIn("臺東縣議員建議補助設備類案件建議表1份", body[2])
+        self.assertNotIn("估價單", "".join(body))
+        self.assertNotIn("檢陳", "".join(body))
+        self.assertIn("估價單2份", pg.submission_attachments(ctx))
+        self.assertIn("審核表1份", pg.submission_attachments(ctx))
+        self.assertIn("臺東縣議員建議補助設備類案件建議表1份", pg.submission_attachments(ctx))
         self.assertEqual(pg.meet_text(ctx), "災害搶救科")
 
     def test_equipment_allows_equipment_kind_but_activity_still_rejects_it(self):
@@ -405,7 +422,7 @@ class MultiSourceAndEquipmentTests(unittest.TestCase):
 
 
 class SubmissionFormatTests(unittest.TestCase):
-    """陳報單格式（比照臺東分隊 115 年設備案實際陳報單）與獎懲標準。"""
+    """申請陳報單格式（比照關山分隊陳報單）與獎懲標準。"""
 
     def _equip(self):
         ctx = pg.case_context("equip_rescue", TODAY)
@@ -415,29 +432,46 @@ class SubmissionFormatTests(unittest.TestCase):
         return ctx
 
     def test_matches_real_sample_sentences(self):
+        from docx import Document
         ctx = self._equip()
         self.assertEqual(pg.org_title(ctx), "臺東縣消防局臺東大隊臺東分隊")
         self.assertEqual(pg.submission_subject(ctx),
-                         "有關本分隊辦理「臺東義消分隊115年度購置救災設備及後勤照護設備計畫」乙案，請鑒核。")
+                         "檢陳臺東分隊所屬義消分隊辦理「115年度購置救災設備及後勤照護設備計畫」，請鑒核。")
         body = pg.submission_body(ctx)
-        self.assertEqual(body[1], "二、本案所需經費新臺幣玖萬柒仟肆佰貳拾參元整，由本縣縣議會陳議員志峰"
-                                  "建議本縣縣府補助經費項下支應，建請鈞長同意辦理申請補助款事宜。")
-        self.assertEqual(body[2].split("\n"), [
-            "三、檢陳相關資料附件如下：",
-            "　（一）115年度購置救災設備及後勤照護設備計畫1份。",
-            "　（二）臺東縣議員建議補助設備類案件建議表1份。",
-            "　（三）審核表1份。",
-            "　（四）估價單2份。"])
-        self.assertEqual(body[3], "四、獎懲：依本縣消防局消防專業人員平時考核獎懲標準規定，爭取建議補助款總額度達五萬元至十萬元以下者"
+        self.assertTrue(body[0].endswith("爰訂於115年12月11日辦理「115年度購置救災設備及後勤照護設備計畫」。"))
+        self.assertNotIn("時至", body[0])
+        self.assertEqual(body[1], "本案總經費計新臺幣9萬7,423元，由本縣陳議員志峰補助本局辦理臺東義消分隊"
+                                  "「115年度購置救災設備及後勤照護設備計畫」，計新臺幣9萬7,423元；建請鈞長同意辦理。")
+        self.assertEqual(len(body), 3)
+        self.assertEqual(body[2], "為激勵案內辛勞人員，籌劃本案各項相關行政事宜，俟全案完備結案後，"
+                                  "依本局消防專業人員獎懲標準表，擬予以爭取建議補助款總額度達五萬元至十萬元以下者"
                                   "單位主管及承辦人嘉獎1次；協辦人員(至多2名)嘉獎1次。")
         self.assertEqual(pg.meet_text(ctx), "災害搶救科、人事室")
-        self.assertGreater(len(pg.build_submission_docx(ctx)), 2000)
+        self.assertEqual(pg.submission_signoff_units(ctx), ("臺東消防分隊", "臺東消防大隊"))
+        raw = pg.build_submission_docx(ctx)
+        self.assertGreater(len(raw), 2000)
+        doc = Document(io.BytesIO(raw))
+        text = "\n".join(p.text for p in doc.paragraphs)
+        text += "\n" + "\n".join(cell.text for table in doc.tables for row in table.rows for cell in row.cells)
+        self.assertIn("臺東縣消防局臺東大隊臺東分隊陳報單", text)
+        self.assertNotIn("臺東縣消防局臺東大隊臺東分隊 陳報單", text)
+        self.assertRegex(text, r"中華民國\d{3}年\d{2}月\d{2}日")
+        self.assertIn(pg.SUBMISSION_DOC_NO, text)
+        self.assertIn("承辦人員", text)
+        self.assertIn("單位主管", text)
+        self.assertIn("大隊主管", text)
+        self.assertIn("臺東消防分隊", text)
+        self.assertIn("臺東消防大隊", text)
+        self.assertNotIn("三、檢陳", text)
+        self.assertNotIn("四、獎懲", text)
 
     def test_battalion_account_header_and_wording(self):
         ctx = self._equip()
         ctx.org_unit = ""
         self.assertEqual(pg.org_title(ctx), "臺東縣消防局臺東大隊")
-        self.assertIn("有關本大隊辦理", pg.submission_subject(ctx))
+        self.assertEqual(pg.submission_subject(ctx),
+                         "檢陳臺東大隊所屬義消分隊辦理「115年度購置救災設備及後勤照護設備計畫」，請鑒核。")
+        self.assertEqual(pg.submission_signoff_units(ctx), ("○○消防分隊", "臺東消防大隊"))
         ctx.org_battalion = ""
         self.assertEqual(pg.org_title(ctx), "臺東縣消防局○○大隊○○分隊")
 
@@ -457,7 +491,7 @@ class SubmissionFormatTests(unittest.TestCase):
             got = pg.award_by_amount(amount)
             if expect:
                 self.assertIn(expect, got, amount)
-                self.assertTrue(got.startswith("依本縣消防局消防專業人員平時考核獎懲標準規定，"))
+                self.assertTrue(got.startswith("為激勵案內辛勞人員，籌劃本案各項相關行政事宜，俟全案完備結案後，依本局消防專業人員獎懲標準表，擬予以"))
             else:
                 self.assertEqual(got, "")
 
@@ -476,23 +510,24 @@ class SubmissionFormatTests(unittest.TestCase):
         ctx.award_basis = "amount"
         self.assertIn("達十萬元至三十萬元以下者", pg.award_text(ctx))
         self.assertIn("人事室", pg.meet_text(ctx))
-        self.assertTrue(pg.submission_body(ctx)[-1].startswith("四、獎懲："))
+        self.assertTrue(pg.submission_body(ctx)[-1].startswith("為激勵案內辛勞人員"))
         ctx.award_basis = "days"
         self.assertIn("在一日內者", pg.award_text(ctx))
         ctx.award_basis = "none"
         self.assertEqual(pg.award_text(ctx), "")
-        self.assertEqual(len(pg.submission_body(ctx)), 3)
+        self.assertEqual(len(pg.submission_body(ctx)), 2)
 
     def test_equipment_has_no_day_based_award(self):
         ctx = self._equip()
         ctx.award_basis = "days"
         self.assertEqual(pg.award_text(ctx), "")
 
-    def test_self_fund_wording_uses_chinese_capitals(self):
+    def test_self_fund_wording_uses_wan_yuan(self):
         ctx = pg.case_context("honor", TODAY)
         text = pg.submission_body(ctx)[1]
-        self.assertIn(f"新臺幣{pg.to_cn_amount(ctx.total)}元整", text)
-        self.assertIn(f"其餘新臺幣{pg.to_cn_amount(ctx.self_fund)}元整", text)
+        self.assertIn(f"新臺幣{pg.wan_yuan(ctx.total)}", text)
+        self.assertIn(f"其餘新臺幣{pg.wan_yuan(ctx.self_fund)}由{ctx.unit.strip()}自籌", text)
+        self.assertNotIn("元整", text.split("\n")[0])
 
 
 class QuantityAndCaseNumberTests(unittest.TestCase):

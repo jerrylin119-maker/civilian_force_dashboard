@@ -40,7 +40,7 @@ if not all(hasattr(db, _n) for _n in ("ensure_compliance_data_initialized", "get
 
 # 與上面同一個原因：重新部署後 sys.modules 裡的 plan_generator 可能還是舊版，
 # normalize_items 沒有 subsidy 參數，計畫書產生器一載入就 TypeError。
-_PLAN_GENERATOR_REVISION = 11
+_PLAN_GENERATOR_REVISION = 12
 
 
 def load_plan_generator():
@@ -1967,7 +1967,7 @@ def _render_plan_generator_inner():
         if is_activity:
             bg = ""
         elif is_equip:
-            bg = st.text_area("緣由／需求原因（留空則自動產生；陳報單第一點會用到）", key=f"plan_bg_{ver}", height=90)
+            bg = st.text_area("緣由／需求原因（留空則自動產生；陳報單緣由段會用到）", key=f"plan_bg_{ver}", height=90)
         else:
             bg = st.text_area("緣由（留空則自動產生）", key=f"plan_bg_{ver}", height=90)
         pu = st.text_area("目的（留空則自動產生）", key=f"plan_pu_{ver}", height=90)
@@ -1988,7 +1988,7 @@ def _render_plan_generator_inner():
                 st.session_state.get("plan_roster_base", pd.DataFrame([{"單位": "", "職稱": "", "姓名": ""}])),
                 num_rows="dynamic", use_container_width=True, key=f"plan_roster_{ver}_{er}")
 
-    with st.expander("陳報單設定：獎懲（第四點）、敬會單位", expanded=True):
+    with st.expander("陳報單設定：敘獎、敬會單位", expanded=True):
         st.caption("獎懲只寫在陳報單，不寫進計畫書。依「消防專業人員平時考核獎懲標準」："
                    "金額依爭取建議補助款總額度；天數依活動辦理時程及支援勤務天數。有獎懲時，敬會單位會自動加上人事室。")
         award_basis = st.radio("獎懲依據", list(pg.AWARD_BASES), format_func=lambda k: pg.AWARD_BASES[k],
@@ -2079,11 +2079,11 @@ def _render_plan_generator_inner():
     with award_box:
         _award = pg.award_text(ctx)
         if award_basis == "none":
-            st.caption("不敘獎：陳報單不會有第四點。")
+            st.caption("不敘獎：陳報單不會有敘獎段。")
         elif _award:
-            st.info("陳報單第四點會寫：\n\n" + "四、獎懲：" + _award.replace("\n", "  \n"))
+            st.info("陳報單敘獎段會寫：\n\n" + _award.replace("\n", "  \n"))
         elif award_basis == "amount":
-            st.caption("爭取建議補助款未達兩萬元，標準裡沒有對應的獎勵額度，陳報單不會有第四點。")
+            st.caption("爭取建議補助款未達兩萬元，標準裡沒有對應的獎勵額度，陳報單不會有敘獎段。")
         elif award_basis == "days":
             st.caption("需要有活動開始、結束日期才能依天數計算（設備類沒有活動日期）。")
         else:
@@ -2163,7 +2163,8 @@ def _render_plan_generator_inner():
             st.success("✅ 已登錄到案件管制系統，大隊與業務科可以開始審核。")
             st.markdown(f'<div style="font-size:2rem; font-weight:800; color:#dc2626;">案件編號：{regd["case_no"]}</div>',
                         unsafe_allow_html=True)
-            st.caption("請把案號寫在紙本計畫與陳報單上。下面下載的計畫書、概算表、陳報單，每頁右上角已自動印上案號。")
+            st.caption("請把案號寫在紙本計畫與陳報單上。下載的計畫書、概算表、陳報單，每頁右上角已自動印上案號。"
+                       "陳報單正文的字號仍留「消○分字第　　號」，請分隊自行填寫。")
             if regd["sig"] != sig:
                 st.warning("登錄之後您又修改了計畫名稱、金額、日期或補助來源，和已登錄的案件資料不一致。"
                            "案件管制系統裡的資料不會跟著改，請先確認是否要重新登錄或通知大隊。")
@@ -2208,9 +2209,10 @@ def _render_plan_generator_inner():
         st.caption(pg.budget_note(ctx))
     with st.expander("展開陳報單預覽（送計畫時附上）", expanded=False):
         st.markdown(pg.submission_markdown(ctx))
-        st.caption("活動、訓練、設備的陳報單句型相同，只有計畫名稱與檢陳文件不同。日期、字號請自行填寫。"
+        st.caption("申請陳報單比照關山分隊：案由、緣由、經費、敘獎三段，不另列檢陳附件。"
+                   "列印日期已帶入今天，字號請分隊自行填寫。"
                    + pg.issuing_note(ctx)
-                   + ("設備類須附廠商估價單與縣政府設備類審核表；核銷時另附財產增加單。" if is_equip else ""))
+                   + ("設備類須另附廠商估價單與縣政府設備類審核表；核銷時另附財產增加單。" if is_equip else ""))
     base = f"{ctx.year}年{ctx.unit.strip()}{ctx.name_for_title}"
     d1_, d2_, d3_ = st.columns(3)
     d1_.download_button("📄 下載計畫書（Word）", data=pg.build_docx(ctx), file_name=f"{base}計畫書草稿.docx",
