@@ -26,7 +26,7 @@ from subsidy_check import (
 
 # app.py 用這個數字判斷記憶體裡的模組是不是舊版。Streamlit Cloud 重新部署時
 # 常常只重跑 app.py，sys.modules 仍留著上一版 plan_generator。
-MODULE_REVISION = 11
+MODULE_REVISION = 12
 
 PLAN_TYPES = {
     "training": {
@@ -1578,10 +1578,17 @@ def markdown_preview(ctx):
 
 
 # ---------------------------------------------------------------- 陳報單（送計畫時附上）
-# 格式依 115 年成功分隊送計畫的陳報單：案由、陳報內容（一預定辦理、二經費、三檢陳文件、四敘獎）、敬會、簽核欄。
-# 活動、訓練、設備的句型相同，只有計畫名稱與檢陳文件不同。
+# 申請陳報單比照關山分隊：抬頭緊接「陳報單」、列印當日、字號留白、
+# 案由、陳報內容三段（緣由、經費、敘獎；不編號、不另列檢陳）、敬會、簽核欄。
+# 核銷陳報單不在這裡產生。
 _COMPOUND_SURNAMES = ("歐陽", "司馬", "諸葛", "上官", "夏侯", "皇甫", "慕容", "東方", "南宮", "公孫", "尉遲",
                       "長孫", "司徒", "澹台", "令狐", "鍾離", "宇文")
+SUBMISSION_DOC_NO = "消○分字第　　號"
+_AWARD_LEAD = "為激勵案內辛勞人員，籌劃本案各項相關行政事宜，俟全案完備結案後，依本局消防專業人員獎懲標準表，擬予以"
+_TIME_SPAN = re.compile(
+    r"(\d{1,2})\s*[:：]\s*(\d{2})\s*[－\-—–~～至到]+\s*(\d{1,2})\s*[:：]\s*(\d{2})")
+_TIME_SPAN_CN = re.compile(
+    r"(\d{1,2})\s*時(?:\s*(\d{1,2})\s*分)?\s*[至到－\-—–~～]+\s*(\d{1,2})\s*時(?:\s*(\d{1,2})\s*分)?")
 
 
 def _tw(text):
@@ -1597,10 +1604,6 @@ def org_title(ctx):
     if bn:
         return f"臺東縣消防局{bn}"
     return "臺東縣消防局○○大隊○○分隊"
-
-
-def _self_word(ctx):
-    return "大隊" if (ctx.org_battalion and not ctx.org_unit) else "分隊"
 
 
 def plan_full_name(ctx):
@@ -1625,9 +1628,69 @@ def _equipment_reason(ctx):
     return f"充實{ctx.unit.strip()}救災及訓練所需設備，提升勤務效能"
 
 
+def submission_print_date(today=None):
+    """陳報單列印日期，月份、日期補零：中華民國115年09月08日。"""
+    d = today or date.today()
+    return f"中華民國{d.year - 1911}年{d.month:02d}月{d.day:02d}日"
+
+
+def wan_yuan(n):
+    """陳報單金額用阿拉伯數字的萬元寫法：20000 → 2萬元，97423 → 9萬7,423元。"""
+    n = int(round(float(n or 0)))
+    if n < 0:
+        return "負" + wan_yuan(-n)
+    wan, rest = divmod(n, 10000)
+    if wan and rest:
+        return f"{wan}萬{rest:,}元"
+    if wan:
+        return f"{wan}萬元"
+    return f"{n:,}元"
+
+
+def _filing_unit(ctx):
+    """案由的送件單位。分隊帳號用分隊名，只有大隊時用大隊名。"""
+    unit = _tw(ctx.org_unit)
+    battalion = _tw(ctx.org_battalion)
+    if unit:
+        return unit
+    if battalion:
+        return battalion
+    return "○○分隊"
+
+
+def _yixiao_unit(ctx):
+    """經費句的受補助單位。已寫義消就沿用，否則把分隊改成義消分隊。"""
+    unit = _tw(ctx.unit)
+    if not unit:
+        return "○○義消分隊"
+    if "義消" in unit:
+        return unit
+    if unit.endswith("分隊"):
+        return unit[:-2] + "義消分隊"
+    return unit
+
+
+def _fire_org_name(name, suffix):
+    """簽核欄單位：關山分隊 → 關山消防分隊。已有「消防」則不重複。"""
+    name = _tw(name)
+    if not name:
+        return f"○○消防{suffix}"
+    if "消防" in name:
+        return name
+    for tail in ("分隊", "小隊", "大隊"):
+        if name.endswith(tail):
+            return name[:-len(tail)] + "消防" + tail
+    return name + "消防" + suffix
+
+
+def submission_signoff_units(ctx):
+    """簽核欄左為分隊、右為大隊。"""
+    return _fire_org_name(ctx.org_unit, "分隊"), _fire_org_name(ctx.org_battalion, "大隊")
+
+
 def submission_subject(ctx):
-    """案由。"""
-    return f"有關本{_self_word(ctx)}辦理「{plan_full_name(ctx)}」乙案，請鑒核。"
+    """案由：檢陳○○分隊所屬義消分隊辦理「計畫名稱」，請鑒核。"""
+    return f"檢陳{_filing_unit(ctx)}所屬義消分隊辦理「{ctx.title2}」，請鑒核。"
 
 
 def _source_name(src):
@@ -1652,23 +1715,39 @@ def _councilor_call(names):
     return "、".join(out) or "ＯＯ議員"
 
 
-def _fund_source_clause(src):
+def _subsidy_pay_clause(src, unit, plan):
+    """一筆補助來源：議員寫「由本縣○議員」，公所寫「由○○公所」。"""
+    amount = wan_yuan(src["amount"])
     if src["kind"] == "rep":
-        town = _township_name(src)
-        return f"{town}{format_people(src['names'], '代表')}建議{town}補助經費項下支應"
-    return f"本縣縣議會{_councilor_call(src['names'])}建議本縣縣府補助經費項下支應"
+        town = _township_name(src) or "○○公所"
+        payer = f"由{town}"
+    else:
+        payer = f"由本縣{_councilor_call(src['names'])}"
+    return f"{payer}補助本局辦理{unit}{plan}，計新臺幣{amount}"
 
 
 def _fund_sentence(ctx):
-    """第二點：所需經費（國字大寫）與經費來源。"""
-    total = f"新臺幣{to_cn_amount(ctx.total)}元整"
-    srcs = ctx.sources
+    """經費段：阿拉伯數字萬元。議員接在總經費後面；公所、自籌各成一句。"""
+    unit = _yixiao_unit(ctx)
+    plan = f"「{ctx.title2}」"
+    councilors = [s for s in ctx.sources if s["kind"] != "rep"]
+    reps = [s for s in ctx.sources if s["kind"] == "rep"]
+    head = f"本案總經費計新臺幣{wan_yuan(ctx.total)}"
+    if councilors:
+        head += "，" + "，".join(_subsidy_pay_clause(s, unit, plan) for s in councilors)
+    sentences = [head]
+    sentences.extend(_subsidy_pay_clause(s, unit, plan) for s in reps)
     self_fund = max(ctx.self_fund, 0)
-    if len(srcs) == 1 and self_fund < 0.5:
-        return f"二、本案所需經費{total}，由{_fund_source_clause(srcs[0])}，建請鈞長同意辦理申請補助款事宜。"
-    parts = "、".join(f"新臺幣{to_cn_amount(s['amount'])}元整由{_fund_source_clause(s)}" for s in srcs)
-    rest = f"，其餘新臺幣{to_cn_amount(self_fund)}元整由{ctx.unit.strip()}自籌款支應" if self_fund >= 0.5 else ""
-    return f"二、本案所需經費{total}，其中{parts}{rest}，建請鈞長同意辦理申請補助款事宜。"
+    if self_fund >= 0.5:
+        sentences.append(f"其餘新臺幣{wan_yuan(self_fund)}由{unit}自籌")
+    if len(sentences) == 1:
+        text = sentences[0] + "；建請鈞長同意辦理。"
+    else:
+        text = "。".join(sentences) + "。建請鈞長同意辦理。"
+    basis = str(getattr(ctx, "procurement_basis", "") or "").strip()
+    if basis:
+        text += "\n" + basis
+    return text
 
 
 def submission_attachments(ctx):
@@ -1704,9 +1783,8 @@ def issuing_note(ctx):
     return "本案含縣府補助（議員建議），依規定由本局權責科室發文。"
 
 
-# ---- 獎懲：依「消防專業人員平時考核獎懲標準」
+# ---- 獎懲：人數、次數仍依「消防專業人員平時考核獎懲標準」，只改陳報單的起句。
 AWARD_BASES = {"amount": "依爭取補助款金額", "days": "依活動辦理天數", "custom": "自行輸入", "none": "不敘獎"}
-_AWARD_PREFIX = "依本縣消防局消防專業人員平時考核獎懲標準規定，"
 
 
 def award_by_amount(subsidy):
@@ -1722,7 +1800,7 @@ def award_by_amount(subsidy):
         label, who = "達兩萬元以上，未達五萬元", "承辦人嘉獎1次；協辦人員(至多2名)嘉獎1次"
     else:
         return ""
-    return f"{_AWARD_PREFIX}爭取建議補助款總額度{label}者{who}。"
+    return f"{_AWARD_LEAD}爭取建議補助款總額度{label}者{who}。"
 
 
 def award_by_days(start, end):
@@ -1736,7 +1814,7 @@ def award_by_days(start, end):
         label, who = "在二日內", "承辦人嘉獎2次；單位主管嘉獎1次；協辦人員嘉獎1次"
     else:
         label, who = "在一日內", "承辦人嘉獎2次；單位主管嘉獎1次；協辦人員嘉獎1次"
-    return f"{_AWARD_PREFIX}活動辦理時程及支援勤務{label}者{who}。"
+    return f"{_AWARD_LEAD}活動辦理時程及支援勤務{label}者{who}。"
 
 
 def award_lines(ctx):
@@ -1748,16 +1826,15 @@ def award_lines(ctx):
 
 
 def award_text(ctx):
-    """第四點「獎懲」內容（不含「四、獎懲：」）。空字串表示不加第四點。"""
+    """敘獎段。未達標準或選擇不敘獎時回傳空字串，陳報單就省略這一段。"""
     basis = ctx.award_basis or ("custom" if ctx.awards else "none")
     if basis == "amount":
         return award_by_amount(ctx.subsidy)
     if basis == "days":
         return award_by_days(ctx.start, ctx.end) if ctx.plan_type != "equipment" else ""
-    if basis == "custom":
-        lines = award_lines(ctx)
-        if lines:
-            return "辦理本案出（不）力人員依規定獎（懲）勵，敘獎額度如下：\n" + "\n".join("　" + x for x in lines)
+    if basis == "custom" and ctx.awards:
+        who = "、".join(f"{a['role']}{a['count']}名{a['kind']}{a['times']}次" for a in ctx.awards)
+        return f"{_AWARD_LEAD}{who}。"
     return ""
 
 
@@ -1785,37 +1862,79 @@ def meet_text(ctx):
     return text
 
 
-def submission_body(ctx):
-    """陳報內容（分點，每個元素一點；附件與獎懲內含換行）。"""
-    full = plan_full_name(ctx)
-    if ctx.plan_type == "equipment":
-        if ctx.background.strip():
-            first = f"一、{_end(ctx.background)}特訂定本計畫以充實{ctx.unit.strip()}設備。"
-        else:
-            first = f"一、為{_equipment_reason(ctx)}，擬辦理「{full}」。"
+def _clock_label(hour, minute):
+    hour, minute = int(hour), int(minute)
+    if minute == 0:
+        return f"{hour}時"
+    return f"{hour}時{minute:02d}分"
+
+
+def course_time_span(ctx):
+    """課程表最早開始到最晚結束。沒有起迄時間就回傳空字串。"""
+    spans = []
+    for course in ctx.courses or []:
+        text = str(course.get("time") or "")
+        matched = list(_TIME_SPAN.finditer(text))
+        if matched:
+            for m in matched:
+                spans.append(((int(m.group(1)), int(m.group(2))), (int(m.group(3)), int(m.group(4)))))
+            continue
+        for m in _TIME_SPAN_CN.finditer(text):
+            spans.append(((int(m.group(1)), int(m.group(2) or 0)), (int(m.group(3)), int(m.group(4) or 0))))
+    if not spans:
+        return ""
+    start = min(s[0] for s in spans)
+    end = max(s[1] for s in spans)
+    return _clock_label(*start) + "至" + _clock_label(*end)
+
+
+def _submission_when(ctx):
+    """爰訂於後面的日期與時間。沒有活動日期就空白。"""
+    if not ctx.start or not ctx.end:
+        return ""
+    date_part = ctx.date_text
+    if date_part.startswith("（"):
+        date_part = ""
+    return date_part + course_time_span(ctx)
+
+
+def _reason_paragraph(ctx):
+    """緣由。有日期就接到「爰訂於…辦理『計畫名稱』」。"""
+    plan = f"「{ctx.title2}」"
+    if ctx.background.strip():
+        reason = ctx.background.strip().rstrip("。！？")
+    elif ctx.plan_type == "equipment":
+        reason = f"為{_equipment_reason(ctx)}"
     else:
-        first = f"一、本案預訂於{ctx.date_text}於{ctx.place.strip()}辦理「{full}」。"
-    third = "三、檢陳相關資料附件如下：\n" + "\n".join(
-        (f"　（{_CN_PLAIN[n]}）{x}" if n < len(_CN_PLAIN) else f"　（{n + 1}）{x}") + "。"
-        for n, x in enumerate(submission_attachments(ctx)))
-    fund = _fund_sentence(ctx)
-    basis = str(getattr(ctx, "procurement_basis", "") or "").strip()
-    if basis:
-        fund += "\n" + basis
-    out = [first, fund, third]
+        place = ctx.place.strip()
+        where = f"於{place}" if place else ""
+        reason = f"為辦理{ctx.unit.strip()}{ctx.activity or '本案'}{where}"
+    when = _submission_when(ctx)
+    if when:
+        return f"{reason}，爰訂於{when}辦理{plan}。"
+    return f"{reason}，辦理{plan}。"
+
+
+def submission_body(ctx):
+    """陳報內容：緣由、經費，有敘獎再加一段。不編號，也不列檢陳附件。"""
+    out = [_reason_paragraph(ctx), _fund_sentence(ctx)]
     award = award_text(ctx)
     if award:
-        out.append("四、獎懲：" + award)
+        out.append(award)
     return out
 
 
 def submission_markdown(ctx):
     lines = ([f"案件編號：{ctx.case_no}", ""] if ctx.case_no else [])
-    lines += [f"**{org_title(ctx)} 陳報單**　　{ctx.year}年○月○日　第○○○號", "",
-             f"**案由**：{submission_subject(ctx)}", "", "**陳報內容**：", ""]
+    squad, battalion = submission_signoff_units(ctx)
+    lines += [f"**{org_title(ctx)}陳報單**　　{submission_print_date()}", "",
+              SUBMISSION_DOC_NO, "",
+              f"**案由**：{submission_subject(ctx)}", "", "**陳報內容**：", ""]
     for p in submission_body(ctx):
         lines += [line + "  " for line in p.split("\n")]
-    lines += ["", f"敬會　{meet_text(ctx)}", "", "敬陳　局長", "", "承辦人　／　分（小）隊長　／　大隊長"]
+    lines += ["", f"敬會　{meet_text(ctx)}", "", "敬陳　局長", "",
+              f"{squad}　　{battalion}", "",
+              "承辦人員　　單位主管　　承辦人員　　大隊主管"]
     return "\n".join(lines)
 
 
@@ -1946,8 +2065,36 @@ def build_docx(ctx):
     return buf.getvalue()
 
 
+def _fill_cell(cell, lines, size=14, bold=False, align=None):
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    cell.text = ""
+    first = True
+    for line in lines:
+        p = cell.paragraphs[0] if first else cell.add_paragraph()
+        first = False
+        if align:
+            p.alignment = align
+        _set_font(p.add_run(line), size, bold)
+
+
+def _no_table_borders(table):
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    tbl = table._tbl
+    tbl_pr = tbl.tblPr
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = OxmlElement(f"w:{edge}")
+        el.set(qn("w:val"), "nil")
+        el.set(qn("w:sz"), "0")
+        el.set(qn("w:space"), "0")
+        el.set(qn("w:color"), "auto")
+        borders.append(el)
+    tbl_pr.append(borders)
+
+
 def build_submission_docx(ctx):
-    """陳報單 Word：抬頭、案由、陳報內容、敬會、敬陳局長、承辦人／分（小）隊長／大隊長，格式比照歷年陳報單。"""
+    """申請陳報單 Word：抬頭緊接陳報單、列印日期、空白字號、三段陳報內容、分隊與大隊簽核欄。"""
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Cm
@@ -1955,41 +2102,37 @@ def build_submission_docx(ctx):
     doc = Document()
     _case_no_header(doc, ctx)
     sec = doc.sections[0]
-    sec.left_margin = sec.right_margin = Cm(2.2)
-    sec.top_margin = sec.bottom_margin = Cm(2.0)
+    sec.left_margin = sec.right_margin = Cm(1.8)
+    sec.top_margin = sec.bottom_margin = Cm(1.6)
 
-    _para(doc, f"{org_title(ctx)} 陳報單", 18, True, WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
-    _para(doc, f"{ctx.year}年○月○日　第○○○號", 12, False, WD_ALIGN_PARAGRAPH.RIGHT, space_after=4)
+    head = doc.add_table(rows=1, cols=2)
+    _no_table_borders(head)
+    _fill_cell(head.rows[0].cells[0], [f"{org_title(ctx)}陳報單"], 16, True, WD_ALIGN_PARAGRAPH.LEFT)
+    _fill_cell(head.rows[0].cells[1], [submission_print_date()], 12, False, WD_ALIGN_PARAGRAPH.RIGHT)
+    head.rows[0].cells[0].width, head.rows[0].cells[1].width = Cm(11.2), Cm(6.2)
+    _para(doc, SUBMISSION_DOC_NO, 14, False, WD_ALIGN_PARAGRAPH.LEFT, space_after=6)
 
     t = doc.add_table(rows=4, cols=2)
     t.style = "Table Grid"
     labels = ["案　由", "陳報內容", "敬　會", "敬　陳"]
     for row, label in zip(t.rows, labels):
-        row.cells[0].text = ""
-        _set_font(row.cells[0].paragraphs[0].add_run(label), 14, True)
-        row.cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        row.cells[0].width, row.cells[1].width = Cm(2.6), Cm(14.0)
+        _fill_cell(row.cells[0], [label], 14, True, WD_ALIGN_PARAGRAPH.CENTER)
+        row.cells[0].width, row.cells[1].width = Cm(2.4), Cm(15.0)
 
-    def fill(cell, lines, size=14):
-        cell.text = ""
-        first = True
-        for line in lines:
-            p = cell.paragraphs[0] if first else cell.add_paragraph()
-            first = False
-            _set_font(p.add_run(line), size)
-
-    fill(t.rows[0].cells[1], [submission_subject(ctx)])
+    _fill_cell(t.rows[0].cells[1], [submission_subject(ctx)])
     body_lines = [line for p in submission_body(ctx) for line in p.split("\n")]
-    fill(t.rows[1].cells[1], body_lines)
-    fill(t.rows[2].cells[1], [meet_text(ctx)])
-    fill(t.rows[3].cells[1], ["局長"])
+    _fill_cell(t.rows[1].cells[1], body_lines)
+    _fill_cell(t.rows[2].cells[1], [meet_text(ctx)])
+    _fill_cell(t.rows[3].cells[1], ["局長"])
 
     _para(doc, "", 6, space_after=2)
-    s = doc.add_table(rows=1, cols=3)
-    s.style = "Table Grid"
-    for cell, label in zip(s.rows[0].cells, ["承辦人", "分（小）隊長" if _self_word(ctx) == "分隊" else "副大隊長", "大隊長"]):
-        cell.text = ""
-        _set_font(cell.paragraphs[0].add_run(label + "\n\n\n"), 13)
+    sign = doc.add_table(rows=2, cols=8)
+    sign.style = "Table Grid"
+    squad, battalion = submission_signoff_units(ctx)
+    _fill_cell(sign.cell(0, 0).merge(sign.cell(0, 3)), [squad], 12, True, WD_ALIGN_PARAGRAPH.CENTER)
+    _fill_cell(sign.cell(0, 4).merge(sign.cell(0, 7)), [battalion], 12, True, WD_ALIGN_PARAGRAPH.CENTER)
+    for i, label in enumerate(["承辦人員", "", "單位主管", "", "承辦人員", "", "大隊主管", ""]):
+        _fill_cell(sign.cell(1, i), [label or "\n\n"], 12, bool(label), WD_ALIGN_PARAGRAPH.CENTER)
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
