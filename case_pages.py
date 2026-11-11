@@ -84,17 +84,30 @@ def is_enabled():
 
 
 # ---------------------------------------------------------------- 登入
+def _account_label(account):
+    if account.role == cr.ROLE_SECTION:
+        return f"科室｜{account.login}"
+    if account.role == cr.ROLE_BATTALION:
+        return f"大隊｜{account.login}"
+    return f"{account.battalion}　{account.login}"
+
+
 def _login_box(book):
-    if not book.list_accounts():
+    accounts = book.list_accounts()
+    if not accounts:
         st.error("沒有可用的帳號，請通知管理者。")
         return
     st.markdown("#### 🔐 案件登錄系統登入")
     with st.form("case_login"):
-        name = st.text_input("帳號（單位名稱）", placeholder="請輸入單位名稱")
+        pick = st.selectbox("帳號（單位名稱）", accounts, index=None, placeholder="請選擇單位",
+                            format_func=_account_label)
         pw = st.text_input("密碼", type="password")
         go = st.form_submit_button("登入")
     if go:
-        acct, err = book.login(name, pw)
+        if pick is None:
+            st.error("請選擇單位")
+            return
+        acct, err = book.login(pick.login, pw)
         if acct:
             st.session_state["case_user"] = acct
             st.rerun()

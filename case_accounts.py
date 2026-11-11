@@ -101,11 +101,9 @@ class AccountBook:
         return out
 
     def list_accounts(self):
-        """依組織順序列出（科室、大隊、各大隊分隊）。登入頁不再用這份清單當下拉選單。"""
+        """依組織順序列出：每個大隊緊接著自己的分隊，科室放在最後。登入與帳號管理共用這份順序。"""
         book = self.load()
-        order = [a["login"] for a in default_accounts()]
-        first = [norm_login(n) for n in SECTIONS]
-        names = first + [norm_login(n) for n in order if norm_login(n) not in first]
+        names = [norm_login(a["login"]) for a in default_accounts()]
         return [book[n] for n in names if n in book]
 
     # ---- 登入與密碼
