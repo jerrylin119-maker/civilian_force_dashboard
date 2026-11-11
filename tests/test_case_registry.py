@@ -383,5 +383,91 @@ class WorkflowGuardTests(unittest.TestCase):
         return no
 
 
+class ReviewSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self.store = cr.MemoryStore()
+        self.reg = cr.CaseRegistry(self.store, today=date(2026, 10, 27))
+        self.unit = acct(cr.ROLE_UNIT)
+        self.bn = acct(cr.ROLE_BATTALION, "bn", battalion="成功大隊", unit="")
+        self.sec = acct(cr.ROLE_SECTION, "災害搶救科", battalion="", unit="災害搶救科")
+
+    def test_detail_is_not_written_onto_the_main_sheet(self):
+        no = self.reg.submit(self.unit, sample(plan_name="有明細"), detail={
+            "contact": "王小明 0912",
+            "items": [{"name": "便當", "qty": "30", "unit": "份", "price": "100", "total": "3000", "remark": "中餐"}],
+            "attachments": ["活動計畫（含經費概算表）1份"],
+            "note": "請審核",
+        })
+        main = "".join(self.store.rows[self.reg.get(no).row_no - 1])
+        self.assertNotIn("便當", main)
+        self.assertNotIn("0912", main)
+        self.assertEqual(cr.N_COLS, 33)
+        detail = self.reg.submission_detail(no)
+        self.assertEqual(detail["items"][0]["name"], "便當")
+        self.assertEqual(detail["attachments"], ["活動計畫（含經費概算表）1份"])
+        brief = cr.submission_brief(self.reg.get(no), detail)
+        fields = dict(brief["fields"])
+        self.assertEqual(fields["計畫名稱"], "有明細")
+        self.assertIn("成功分隊", fields["單位"])
+        self.assertEqual(fields["聯絡人"], "王小明 0912")
+        self.assertEqual(fields["總經費"], "40,000")
+        self.assertEqual(fields["爭取經費"], "20,000")
+        self.assertIn("古志成", fields["經費來源"])
+        self.assertEqual(fields["目前狀態"], "待大隊初審")
+        self.assertEqual(fields["備註"], "請審核")
+        self.assertEqual(brief["items"][0]["remark"], "中餐")
+
+    def test_summary_without_detail_still_shows_the_sheet_fields(self):
+        no = self.reg.submit(self.unit, sample(plan_name="只有摘要"))
+        self.assertIsNone(self.reg.submission_detail(no))
+        fields = dict(cr.submission_brief(self.reg.get(no), None)["fields"])
+        self.assertEqual(fields["聯絡人"], "王小明")
+        self.assertEqual(fields["計畫名稱"], "只有摘要")
+        self.assertIn("2026/12/11", fields["活動日期"])
+
+    def test_action_cases_follow_pending_role_without_rereading(self):
+        no = self.reg.submit(self.unit, sample(plan_name="待初審"))
+        calls = {"n": 0}
+        real = self.store.read_all
+
+        def counting():
+            calls["n"] += 1
+            return real()
+
+        self.store.read_all = counting
+        queued = self.reg.action_cases(self.bn, self.reg.cases())
+        self.assertEqual([c.case_no for c in queued], [no])
+        again = self.reg.action_cases(self.bn, queued)
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(again[0].case_no, no)
+        self.assertEqual(self.reg.action_cases(self.unit, queued), [])
+        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "退回分隊修正"}, return_reason="補件")
+        returned = self.reg.action_cases(self.unit)
+        self.assertEqual([c.case_no for c in returned], [no])
+        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "通過"})
+        self.reg.update_stage(self.sec, no, "second_review", {"received": True})
+        self.assertEqual([c.case_no for c in self.reg.action_cases(self.sec)], [no])
+
+    def test_cached_value_does_not_reload_inside_the_window(self):
+        calls = {"n": 0}
+
+        def loader():
+            calls["n"] += 1
+            return ["案件"]
+
+        cache = {}
+        self.assertEqual(cr.cached_value(cache, "k", 100, 45, loader), ["案件"])
+        self.assertEqual(cr.cached_value(cache, "k", 120, 45, loader), ["案件"])
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(cr.cached_value(cache, "k", 200, 45, loader), ["案件"])
+        self.assertEqual(calls["n"], 2)
+
+    def test_account_menu_label(self):
+        self.assertEqual(cr.account_menu_label(acct(cr.ROLE_BATTALION, "關山大隊", battalion="關山大隊", unit="")),
+                         "大隊｜關山大隊")
+        self.assertEqual(cr.account_menu_label(acct(cr.ROLE_SECTION, "民力訓練科", battalion="", unit="民力運用及訓練科")),
+                         "科室｜民力訓練科")
+
+
 if __name__ == "__main__":
     unittest.main()

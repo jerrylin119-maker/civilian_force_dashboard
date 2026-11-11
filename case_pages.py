@@ -14,11 +14,15 @@
 """
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import streamlit as st
 
 import case_accounts as ca
 import case_registry as cr
+
+CASE_CACHE_TTL = 45
 
 STAGE_ORDER = ["first_review", "second_review", "reply", "settle_first", "settle_second", "defect", "note"]
 
@@ -85,11 +89,60 @@ def is_enabled():
 
 # ---------------------------------------------------------------- 登入
 def _account_label(account):
-    if account.role == cr.ROLE_SECTION:
-        return f"科室｜{account.login}"
-    if account.role == cr.ROLE_BATTALION:
-        return f"大隊｜{account.login}"
-    return f"{account.battalion}　{account.login}"
+    return cr.account_menu_label(account)
+
+
+def _case_cache_key(reg):
+    return f"case_cache_{id(reg.store)}"
+
+
+def cached_cases(reg):
+    """同一輪重繪、以及短時間內換分頁，不再重讀案件表。"""
+    return cr.cached_value(st.session_state, _case_cache_key(reg), time.time(), CASE_CACHE_TTL, reg.cases)
+
+
+def invalidate_cases(reg):
+    try:
+        st.session_state.pop(_case_cache_key(reg), None)
+    except Exception:
+        pass
+
+
+def _logout_case_user():
+    for key in ("case_user", "case_handoff", "case_handoff_detail", "case_nav"):
+        st.session_state.pop(key, None)
+
+
+def render_login_status_bar(can_jump=False):
+    """補捐助各子頁頁首：目前登入的單位，以及待辦件數。"""
+    if not is_enabled():
+        return
+    acct = st.session_state.get("case_user")
+    if acct is None:
+        return
+    pending = []
+    if not acct.must_change:
+        try:
+            reg = get_registry(get_config())
+            pending = reg.action_cases(acct, cached_cases(reg))
+        except Exception:
+            pending = []
+    left, right = st.columns([5, 1])
+    badge = f"　🔔 {len(pending)} 件待處理" if pending else ""
+    left.markdown(f"**👤 目前登入：{_account_label(acct)}**{badge}")
+    right.button("登出", key="case_header_logout", on_click=_logout_case_user)
+    if not pending:
+        return
+    lines = "、".join(f"{c.case_no}（{c['plan_name'][:16]}）" for c in pending[:8])
+    extra = f" 等共 {len(pending)} 件" if len(pending) > 8 else ""
+    st.warning(f"🔔 您有 {len(pending)} 件案件待審核：{lines}{extra}")
+    if can_jump:
+        st.button("前往處理案件", key="case_header_jump", on_click=_open_case_queue)
+
+
+def _open_case_queue():
+    st.session_state["top_main_nav"] = "📮 案件登錄"
+    st.session_state["case_nav"] = "✍️ 處理案件"
 
 
 def _login_box(book):
@@ -124,7 +177,7 @@ def _cases_df(cases):
 
 
 def _visible(reg, acct):
-    return reg.visible_cases(acct)
+    return reg.visible_cases(acct, cached_cases(reg))
 
 
 def _flash():
@@ -193,7 +246,8 @@ def _page_new(reg, acct, pg):
                 "battalion": battalion, "unit": unit, "officer": officer, "purpose": purpose, "plan_name": plan_name,
                 "date_start": ds, "date_end": de, "total": total, "applied": applied,
                 "source_kind": source_kind, "source_detail": source_detail,
-            }, source="計畫產生器" if hand else "手動填寫")
+            }, source="計畫產生器" if hand else "手動填寫",
+               detail=st.session_state.get("case_handoff_detail") if hand else None)
         except cr.RegistryError as exc:
             reg.log_event(acct, "登錄未成功", str(exc), "計畫產生器" if hand else "手動填寫")
             st.error(str(exc))
@@ -203,6 +257,8 @@ def _page_new(reg, acct, pg):
             st.error(f"寫入失敗，案件沒有登錄：{type(exc).__name__}。請稍後再試或通知管理者。")
             return
         st.session_state.pop("case_handoff", None)
+        st.session_state.pop("case_handoff_detail", None)
+        invalidate_cases(reg)
         st.session_state["case_form_ver"] = ver + 1
         st.session_state["case_flash"] = f"✅ 已登錄。案件編號：{case_no}　請把單號寫在紙本文件上。"
         st.rerun()
@@ -253,8 +309,51 @@ def _stage_form(reg, acct, case, stage, expanded):
             except Exception as exc:
                 st.error(f"寫入失敗，沒有更新：{type(exc).__name__}")
                 return
+            invalidate_cases(reg)
             st.session_state["case_flash"] = "已儲存。" if diff else "沒有變更。"
             st.rerun()
+
+
+def _show_return_reason(reg, case):
+    if "退回" not in case.status:
+        return
+    reason = reg.latest_return_reason(case.case_no)
+    if reason:
+        st.error(f"退回原因：{reason}")
+    else:
+        st.warning("這件案子已退回，但沒有留下退回原因。請直接向大隊確認要修正的地方。")
+
+
+def _render_submission_summary(reg, acct, case):
+    """審核畫面上方的唯讀摘要。項目明細若沒寫進「案件內容」表，就明白標出來。"""
+    try:
+        detail = reg.submission_detail(case.case_no) or {}
+    except Exception:
+        detail = {}
+    brief = cr.submission_brief(case, detail)
+    st.markdown("##### 送審內容（唯讀）")
+    for label, value in brief["fields"]:
+        st.markdown(f"**{label}**　{value}")
+    st.markdown("**項目明細**")
+    if brief["items"]:
+        for it in brief["items"]:
+            remark = f"　{it['remark']}" if it.get("remark") else ""
+            st.markdown(f"- {it['name']}　{it['qty']}{it['unit']} × {it['price']} 元＝{it['total']} 元{remark}")
+    else:
+        st.markdown("- 這件案子登錄時沒有把項目明細寫進系統，案件主表只有摘要欄位。")
+    st.markdown("**附件／檢陳**")
+    if brief["attachments"]:
+        for name in brief["attachments"]:
+            st.markdown(f"- {name}")
+    else:
+        st.markdown("- 沒有一併登錄的附件清單。紙本仍請附計畫書與概算表。")
+    history = [r for r in reg.visible_log(acct) if r.get("案件編號") == case.case_no]
+    st.markdown("**異動紀錄**")
+    if history:
+        for row in history[::-1][:8]:
+            st.markdown(f"- {row.get('時間', '')}　{row.get('階段', '')}　{row.get('異動內容', '')}")
+    else:
+        st.markdown("- 尚無異動紀錄")
 
 
 def _show_return_and_history(reg, acct, case):
@@ -320,12 +419,8 @@ def _page_handle(reg, acct):
     pick = st.selectbox("選擇案件", options, format_func=lambda n: (
         f"{'🔔 ' if n in mine else ''}{n}｜{by_no[n]['unit']}｜{by_no[n]['plan_name'][:24]}｜{by_no[n].status}"))
     case = by_no[pick]
-    st.markdown(f"**{case['plan_name']}**")
-    st.caption(f"{case['battalion']} {case['unit']}　承辦人 {case['officer']}　用途 {case['purpose']}　"
-               f"活動日期 {case['date_start'] or '—'}～{case['date_end'] or '—'}")
-    st.markdown(f"總經費 **{cr.to_int(case['total']):,}** 元｜爭取 **{cr.to_int(case['applied']):,}** 元｜"
-                f"來源 {case['source_detail']}｜目前狀態 **{case.status}**")
-    _show_return_and_history(reg, acct, case)
+    _show_return_reason(reg, case)
+    _render_submission_summary(reg, acct, case)
     if acct.role == cr.ROLE_UNIT:
         if cr.pending_for(case) == cr.ROLE_UNIT:
             _resubmit_form(reg, acct, case)
@@ -363,6 +458,7 @@ def _resubmit_form(reg, acct, case):
         except cr.RegistryError as exc:
             st.error(str(exc))
             return
+        invalidate_cases(reg)
         st.session_state["case_flash"] = "已重新送審。"
         st.rerun()
 
@@ -409,8 +505,12 @@ def login_gate():
 def submit_draft(acct, draft):
     """計畫書產生器定稿登錄用。回傳 (案件編號, 錯誤訊息)；成功時錯誤訊息是空字串。"""
     reg = get_registry(get_config())
+    draft = dict(draft)
+    detail = draft.pop("_detail", None)
     try:
-        return reg.submit(acct, draft, source="計畫產生器"), ""
+        case_no = reg.submit(acct, draft, source="計畫產生器", detail=detail)
+        invalidate_cases(reg)
+        return case_no, ""
     except cr.RegistryError as exc:
         reg.log_event(acct, "登錄未成功", str(exc), "計畫產生器")
         return "", str(exc)
