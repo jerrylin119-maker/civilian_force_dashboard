@@ -24,6 +24,9 @@ TZ = timezone(timedelta(hours=8))
 HEADER_ROWS = 2          # 第 1 列：分組標題；第 2 列：欄位標題；資料從第 3 列開始
 LOG_SHEET_NAME = "異動紀錄"
 LOG_HEADERS = ["時間", "案件編號", "帳號", "角色", "階段", "異動內容", "來源"]
+# 項目明細、附件、聯絡人備註不放進案件主表（欄位要跟表單回應一致）。另開這張小表。
+DETAIL_SHEET_NAME = "案件內容"
+DETAIL_HEADERS = ["案件編號", "聯絡人", "項目明細", "附件", "備註", "更新時間"]
 
 # ---------------------------------------------------------------- 角色與階段
 ROLE_UNIT = "unit"            # 分隊承辦人
@@ -291,6 +294,74 @@ class Account:
     def is_admin(self):
         """民力訓練科：可重設密碼、代為初審、修改已鎖定的前階段（會記入管理者覆核）。"""
         return self.role == ROLE_SECTION and self.login in ADMIN_LOGINS
+
+
+def account_menu_label(account):
+    """登入清單與頁首用的單位名稱。"""
+    if account.role == ROLE_SECTION:
+        return f"科室｜{account.login}"
+    if account.role == ROLE_BATTALION:
+        return f"大隊｜{account.login}"
+    if account.battalion:
+        return f"{account.battalion}　{account.login}"
+    return account.login
+
+
+def cached_value(cache, key, now, ttl, loader):
+    """ttl 秒內重複讀同一個 key 不再呼叫 loader。給頁首待辦數字用，避免每次重繪都打試算表。"""
+    hit = cache.get(key)
+    if hit is not None and now - hit[0] < ttl:
+        return hit[1]
+    value = loader()
+    cache[key] = (now, value)
+    return value
+
+
+def encode_items(items):
+    lines = []
+    for it in items or []:
+        lines.append("\t".join(_clean(it.get(k)) for k in ("name", "qty", "unit", "price", "total", "remark")))
+    return "\n".join(line for line in lines if line.strip())
+
+
+def decode_items(text):
+    out = []
+    for line in _clean(text).splitlines():
+        parts = (line.split("\t") + [""] * 6)[:6]
+        if not any(parts):
+            continue
+        out.append({"name": parts[0], "qty": parts[1], "unit": parts[2],
+                    "price": parts[3], "total": parts[4], "remark": parts[5]})
+    return out
+
+
+def submission_brief(case, detail=None):
+    """審核人要看的送審摘要。detail 是「案件內容」表的快照；沒有時只顯示主表欄位。"""
+    detail = detail or {}
+    start, end = _clean(case["date_start"]), _clean(case["date_end"])
+    when = f"{start or '—'}～{end or '—'}" if (start or end) else "—"
+    source = " ".join(x for x in (_clean(case["source_kind"]), _clean(case["source_detail"])) if x)
+    contact = _clean(detail.get("contact")) or _clean(case["officer"])
+    note = _clean(detail.get("note")) or _clean(case["note"])
+    fields = [
+        ("計畫名稱", _clean(case["plan_name"]) or "—"),
+        ("單位", " ".join(x for x in (_clean(case["battalion"]), _clean(case["unit"])) if x) or "—"),
+        ("活動日期", when),
+        ("經費來源", source or "—"),
+        ("總經費", f"{to_int(case['total']):,}"),
+        ("爭取經費", f"{to_int(case['applied']):,}"),
+        ("聯絡人", contact or "—"),
+        ("承辦人", _clean(case["officer"]) or "—"),
+        ("經費用途", _clean(case["purpose"]) or "—"),
+        ("目前狀態", case.status if hasattr(case, "status") else case_status(case)),
+        ("備註", note or "—"),
+    ]
+    return {
+        "fields": fields,
+        "items": list(detail.get("items") or []),
+        "attachments": list(detail.get("attachments") or []),
+        "has_detail": bool(detail.get("stored")),
+    }
 
 
 def load_accounts(rows):
@@ -664,6 +735,10 @@ class CaseRegistry:
             return self.can_view(account, case)
         return self.can_edit(account, "first_review" if account.role == ROLE_BATTALION else "submit", case)
 
+    def action_cases(self, account, cases=None):
+        """輪到這個帳號處理的案件。傳入 cases 就不再讀表。"""
+        return [c for c in self.visible_cases(account, cases) if self.is_mine(account, c)]
+
     def visible_log(self, account, limit=300):
         """這個帳號看得到的異動紀錄：自己看得到的案件，以及自己的、沒有案件編號的事件。
         民力訓練科另外看得到所有沒有案件編號的事件（例如密碼重設）。"""
@@ -714,11 +789,15 @@ class CaseRegistry:
                 errs.append("活動日期（末）不能早於（始）")
         return errs
 
-    def submit(self, account, data, source="手動填寫"):
+    def submit(self, account, data, source="手動填寫", detail=None):
         if not self.can_edit(account, "submit"):
             raise RegistryError("這個帳號不能登錄案件")
         _require_password_changed(account)
         data = dict(data)
+        if detail is None:
+            detail = data.pop("_detail", None)
+        else:
+            data.pop("_detail", None)
         if account.role == ROLE_UNIT:      # 分隊只能登錄自己單位
             data["battalion"] = account.battalion or data.get("battalion")
             data["unit"] = account.unit or data.get("unit")
@@ -766,7 +845,52 @@ class CaseRegistry:
                 case_no = self.next_case_no(data["battalion"], cases=[c for c in self.cases() if c.row_no != row_no])
                 self.store.write_cells(row_no, {FIELDS["case_no"][0]: case_no})
         self._log(account, case_no, "submit", {k: vals[k] for k in ("plan_name", "applied")}, source)
+        if detail:
+            self.save_submission_detail(case_no, detail)
         return case_no
+
+    def save_submission_detail(self, case_no, detail):
+        """項目明細、附件、聯絡人、備註寫到「案件內容」，不改案件主表欄位。"""
+        row = [
+            case_no,
+            _clean(detail.get("contact")),
+            encode_items(detail.get("items")),
+            "\n".join(_clean(x) for x in (detail.get("attachments") or []) if _clean(x)),
+            _clean(detail.get("note")),
+            now_text(),
+        ]
+        try:
+            rows = self.store.read_tab(DETAIL_SHEET_NAME)
+            if not rows:
+                self.store.append_tab_rows(DETAIL_SHEET_NAME, DETAIL_HEADERS, [row])
+                return
+            for i, existing in enumerate(rows[1:], start=2):
+                if existing and _clean(existing[0]) == case_no:
+                    self.store.update_tab_cells(DETAIL_SHEET_NAME, i, {j: row[j] for j in range(len(row))})
+                    return
+            self.store.append_tab_rows(DETAIL_SHEET_NAME, DETAIL_HEADERS, [row])
+        except Exception:
+            self.detail_failed = True
+
+    def submission_detail(self, case_no):
+        try:
+            rows = self.store.read_tab(DETAIL_SHEET_NAME)
+        except Exception:
+            return None
+        for existing in rows[1:]:
+            if not existing or _clean(existing[0]) != case_no:
+                continue
+            pad = list(existing) + [""] * len(DETAIL_HEADERS)
+            return {
+                "stored": True,
+                "contact": _clean(pad[1]),
+                "items": decode_items(pad[2]),
+                "attachments": [x for x in _clean(pad[3]).splitlines() if x.strip()],
+                "note": _clean(pad[4]),
+            }
+        return None
+
+    detail_failed = False
 
     # ---- 各階段更新
     def update_stage(self, account, case_no, stage, changes, return_reason=None):
@@ -963,4 +1087,25 @@ def draft_from_plan(ctx, officer=""):
         "applied": int(round(ctx.subsidy)),
         "source_kind": kind_text,
         "source_detail": detail,
+    }
+
+
+def plan_detail(ctx, officer=""):
+    """產生器裡審核人需要看、但案件主表沒有欄位可放的內容。"""
+    from plan_generator import submission_attachments
+    items = []
+    for it in getattr(ctx, "items", None) or []:
+        items.append({
+            "name": it.get("name", ""),
+            "qty": it.get("qty", ""),
+            "unit": it.get("unit", ""),
+            "price": it.get("price", ""),
+            "total": it.get("total", ""),
+            "remark": it.get("remark") or it.get("use") or "",
+        })
+    return {
+        "contact": _clean(getattr(ctx, "contact", "")) or _clean(officer),
+        "items": items,
+        "attachments": list(submission_attachments(ctx)),
+        "note": _clean(getattr(ctx, "background", "")),
     }

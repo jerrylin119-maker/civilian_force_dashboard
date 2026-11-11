@@ -85,8 +85,13 @@ class AccountTests(unittest.TestCase):
 
     def test_list_accounts_order(self):
         names = [a.login for a in self.book.list_accounts()]
-        self.assertEqual(names[0], "民力訓練科")
         self.assertEqual(len(names), 37)
+        self.assertEqual(names[0], "台東大隊")
+        self.assertEqual(names[-len(ca.SECTIONS):], list(ca.SECTIONS))
+        for battalion, units in ca.ORG.items():
+            start = names.index(battalion)
+            self.assertEqual(names[start + 1:start + 1 + len(units)], units)
+        self.assertLess(names.index("池上分隊"), names.index("民力訓練科"))
 
     def test_new_password_only_rejects_empty_and_initial(self):
         for bad in ("", "   ", "0000", " 0000 "):
@@ -135,17 +140,19 @@ class AccountTests(unittest.TestCase):
         self.assertNotIn("最後失敗時間", header)
         self.assertNotIn("鎖定至", header)
 
-    def test_login_box_does_not_list_units_or_publish_the_password(self):
+    def test_login_box_does_not_preselect_a_section_or_publish_the_password(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         with open(os.path.join(root, "case_pages.py"), encoding="utf-8") as fh:
             text = fh.read()
         start = text.index("def _login_box")
         end = text.index("\ndef ", start + 1)
         body = text[start:end]
+        self.assertIn("selectbox", body)
+        self.assertIn("index=None", body)
+        self.assertIn("請選擇單位", body)
         self.assertNotIn("0000", body)
-        self.assertNotIn("selectbox", body)
+        self.assertNotIn("民力訓練科", body)
         self.assertNotIn("初次使用", body)
-        self.assertIn("text_input", body)
 
 
 def sample():

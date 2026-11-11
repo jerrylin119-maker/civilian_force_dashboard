@@ -2126,8 +2126,10 @@ def _render_plan_generator_inner():
     if case_pages.is_enabled():
         if can_register:
             st.session_state["case_handoff"] = case_registry.draft_from_plan(ctx)
+            st.session_state["case_handoff_detail"] = case_registry.plan_detail(ctx)
         else:
             st.session_state.pop("case_handoff", None)
+            st.session_state.pop("case_handoff_detail", None)
     if not ready:
         st.info("請先填入申請單位、活動名稱與至少一個概算項目，才能產出草稿。")
         return
@@ -2156,7 +2158,9 @@ def _render_plan_generator_inner():
                 if not officer.strip():
                     st.error("請填寫承辦人姓名")
                 else:
-                    case_no, err = case_pages.submit_draft(acct, dict(draft, officer=officer.strip()))
+                    case_no, err = case_pages.submit_draft(acct, dict(
+                        draft, officer=officer.strip(),
+                        _detail=case_registry.plan_detail(ctx, officer.strip())))
                     if err:
                         st.error(err)
                     else:
@@ -2365,6 +2369,7 @@ def render_subsidy_view():
         <p>義消申請補縣府及各鄉鎮公所補捐助案件 | 業務 SOP • 申請案件注意要點 • 錯誤樣態歷史案例 • 計畫書產生器 • 核銷自我檢核</p>
     </div>
     """, unsafe_allow_html=True)
+    case_pages.render_login_status_bar(can_jump=case_pages.is_enabled())
 
     tabs = SUBSIDY_VIEW_TABS + ([CASE_TAB] if case_pages.is_enabled() else [])
     if st.session_state.get("top_main_nav") not in tabs:
@@ -2720,6 +2725,8 @@ selected_tab = st.radio(
     key="top_main_nav"
 )
 st.session_state["active_tab"] = selected_tab
+if selected_tab in ["💰 補捐助業務"] + SUBSIDY_SUB_TABS:
+    case_pages.render_login_status_bar(can_jump=False)
 
 
 # ==================== 各分頁內容呈現 ====================
