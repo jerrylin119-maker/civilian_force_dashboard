@@ -63,17 +63,17 @@ class AccountTests(unittest.TestCase):
     def test_change_password(self):
         with self.assertRaises(cr.RegistryError):
             self.book.change_password("成功分隊", "錯的", "abcdef")
-        for bad in ("0000", "123", "0000"):
+        for bad in ("", "   ", "0000"):
             with self.assertRaises(cr.RegistryError):
                 self.book.change_password("成功分隊", "0000", bad)
-        self.book.change_password("成功分隊", "0000", "newpass1")
+        self.book.change_password("成功分隊", "0000", "123")
         self.assertIsNone(self.book.authenticate("成功分隊", "0000"))
-        a = self.book.authenticate("成功分隊", "newpass1")
+        a = self.book.authenticate("成功分隊", "123")
         self.assertFalse(a.must_change)
         self.assertTrue(self.book.authenticate("東河分隊", "0000"))      # 其他帳號不受影響
 
     def test_reset_password_only_by_admin(self):
-        self.book.change_password("成功分隊", "0000", "newpass1")
+        self.book.change_password("成功分隊", "0000", "123")
         with self.assertRaises(cr.RegistryError):
             self.book.reset_password(self.book.authenticate("緊急救護科", "0000"), "成功分隊")
         with self.assertRaises(cr.RegistryError):
@@ -81,12 +81,71 @@ class AccountTests(unittest.TestCase):
         self.book.reset_password(self.book.authenticate("民力訓練科", "0000"), "成功分隊")
         a = self.book.authenticate("成功分隊", "0000")
         self.assertTrue(a and a.must_change)
-        self.assertIsNone(self.book.authenticate("成功分隊", "newpass1"))
+        self.assertIsNone(self.book.authenticate("成功分隊", "123"))
 
     def test_list_accounts_order(self):
         names = [a.login for a in self.book.list_accounts()]
         self.assertEqual(names[0], "民力訓練科")
         self.assertEqual(len(names), 37)
+
+    def test_new_password_only_rejects_empty_and_initial(self):
+        for bad in ("", "   ", "0000", " 0000 "):
+            with self.assertRaises(cr.RegistryError):
+                self.book.change_password("長濱分隊", "0000", bad)
+        self.book.change_password("長濱分隊", "0000", "1")
+        self.assertIsNotNone(self.book.authenticate("長濱分隊", "1"))
+        self.book.change_password("長濱分隊", "1", "abcdefgh")
+        changed = self.book.authenticate("長濱分隊", "abcdefgh")
+        self.assertFalse(changed.must_change)
+        self.assertIsNone(self.book.authenticate("長濱分隊", "1"))
+
+    def test_default_password_cannot_use_the_system_until_changed(self):
+        reg = cr.CaseRegistry(self.store, today=date(2026, 11, 11))
+        acct, err = self.book.login("成功分隊", "0000")
+        self.assertEqual(err, "")
+        self.assertTrue(acct.must_change)
+        with self.assertRaises(cr.RegistryError) as cm:
+            reg.submit(acct, sample())
+        self.assertIn("更改密碼", str(cm.exception))
+        self.book.change_password("成功分隊", "0000", "newpass1")
+        ready = self.book.authenticate("成功分隊", "newpass1")
+        no = reg.submit(ready, sample())
+        self.assertTrue(no.startswith("115-成-"))
+
+    def test_login_with_default_password_forces_the_flag_back_on(self):
+        row = self.book._row_no("金峰分隊")
+        self.store.update_tab_cells(ca.ACCOUNT_TAB, row, {ca.COL_MUST: "FALSE"})
+        self.assertFalse(self.book.authenticate("金峰分隊", "0000").must_change)
+        acct, err = self.book.login("金峰分隊", "0000")
+        self.assertEqual(err, "")
+        self.assertTrue(acct.must_change)
+        self.assertTrue(self.book.load()[ca.norm_login("金峰分隊")].must_change)
+
+    def test_wrong_password_does_not_lock_or_add_columns(self):
+        for _ in range(8):
+            acct, err = self.book.login("成功分隊", "wrong")
+            self.assertIsNone(acct)
+            self.assertEqual(err, "帳號或密碼錯誤")
+        acct, err = self.book.login("成功分隊", "0000")
+        self.assertIsNotNone(acct)
+        self.assertEqual(err, "")
+        header = self.store.read_tab(ca.ACCOUNT_TAB)[0]
+        self.assertEqual(header, ["帳號", "角色", "所屬大隊", "單位", "密碼雜湊", "需更改密碼", "更新時間"])
+        self.assertNotIn("失敗次數", header)
+        self.assertNotIn("最後失敗時間", header)
+        self.assertNotIn("鎖定至", header)
+
+    def test_login_box_does_not_list_units_or_publish_the_password(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "case_pages.py"), encoding="utf-8") as fh:
+            text = fh.read()
+        start = text.index("def _login_box")
+        end = text.index("\ndef ", start + 1)
+        body = text[start:end]
+        self.assertNotIn("0000", body)
+        self.assertNotIn("selectbox", body)
+        self.assertNotIn("初次使用", body)
+        self.assertIn("text_input", body)
 
 
 def sample():
@@ -100,10 +159,12 @@ class DeptRuleTests(unittest.TestCase):
         self.reg = cr.CaseRegistry(cr.MemoryStore(), today=date(2026, 10, 27))
         self.book = ca.AccountBook(self.reg.store)
         self.book.ensure_seeded()
-        self.unit = self.book.authenticate("成功分隊", "0000")
-        self.bn = self.book.authenticate("成功大隊", "0000")
-        self.civil = self.book.authenticate("民力訓練科", "0000")
-        self.rescue = self.book.authenticate("災害搶救科", "0000")
+        for name in ("成功分隊", "成功大隊", "民力訓練科", "災害搶救科"):
+            self.book.change_password(name, "0000", "newpass1")
+        self.unit = self.book.authenticate("成功分隊", "newpass1")
+        self.bn = self.book.authenticate("成功大隊", "newpass1")
+        self.civil = self.book.authenticate("民力訓練科", "newpass1")
+        self.rescue = self.book.authenticate("災害搶救科", "newpass1")
         self.no = self.reg.submit(self.unit, sample())
         self.reg.update_stage(self.bn, self.no, "first_review", {"first_result": "通過"})
 
@@ -164,7 +225,7 @@ class DeptRuleTests(unittest.TestCase):
         self.assertTrue(self.reg.is_mine(self.civil, c))
         other_unit = self.book.authenticate("東河分隊", "0000")
         no2 = self.reg.submit(self.unit, dict(sample(), plan_name="第二件計畫"))
-        self.reg.update_stage(self.bn, no2, "first_review", {"first_result": "退回分隊修正"})
+        self.reg.update_stage(self.bn, no2, "first_review", {"first_result": "退回分隊修正"}, return_reason="請修正金額")
         self.assertTrue(self.reg.is_mine(self.unit, self.reg.get(no2)))
         self.assertFalse(self.reg.is_mine(other_unit, self.reg.get(no2)))
 

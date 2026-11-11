@@ -27,6 +27,7 @@ def visible_doc_links(task):
 import case_pages
 import case_registry
 import subsidy_content as sc
+from maintenance_auth import MAINTENANCE_DISABLED_MESSAGE, maintenance_passwords
 
 # Streamlit Cloud 重新部署後只會重跑 app.py，已經載入記憶體的 database 模組可能還是舊版
 # （缺少新函式，會造成 AttributeError）。偵測到缺函式時強制重新載入，不必手動 Reboot app。
@@ -208,19 +209,16 @@ def auto_backup_async():
 
 
 def get_valid_admin_passwords():
-    """取得科內維護模式的合法密碼集合。
+    """取得科內維護模式的合法密碼。
 
-    優先讀取 Streamlit Secrets（App → Settings → Secrets 設定 admin_password = "..."），
-    如尚未設定則回退為舊版預設密碼，避免尚未設定 Secrets 的環境（如本機開發）直接無法登入。
-    正式環境請務必盡快設定 admin_password，換掉這裡的預設弱密碼。
+    只讀 Streamlit Secrets 的 admin_password。沒有設定時回傳空集合，維護模式停用，
+    不使用任何寫死的密碼。
     """
     try:
         configured = st.secrets.get("admin_password")
     except Exception:
         configured = None
-    if configured:
-        return {str(configured).strip()}
-    return {"119", "admin119", "minli119"}
+    return maintenance_passwords(configured)
 
 
 def set_flash_message(text, msg_type="success", icon="💾"):
@@ -2524,22 +2522,20 @@ with st.sidebar:
     # 3. 科內維護模式（管理員登入）
     st.subheader("🔐 科內維護模式")
     if not st.session_state["is_admin"]:
-        try:
-            _using_default_pw = not st.secrets.get("admin_password")
-        except Exception:
-            _using_default_pw = True
-        if _using_default_pw:
-            st.caption("⚠️ 尚未於 Streamlit Cloud 設定自訂管理密碼，目前為預設密碼，建議盡快至 App → Settings → Secrets 新增 `admin_password` 設定值。")
-        admin_pass = st.text_input("請輸入管理密碼", type="password", help="尚未設定自訂密碼前，預設科內維護密碼為：119")
-        if st.button("🔓 啟用線上維護模式", use_container_width=True):
-            if admin_pass and admin_pass in get_valid_admin_passwords():
-                st.session_state["is_admin"] = True
-                st.session_state["top_main_nav"] = "⚙️ 科內線上維護 (Excel介面)"
-                st.session_state["active_tab"] = "⚙️ 科內線上維護 (Excel介面)"
-                set_flash_message("✅ 已切換至科內維護模式！已為您自動開啟【⚙️ 科內線上維護】分頁。", icon="🔓")
-                st.rerun()
-            else:
-                st.error("❌ 密碼錯誤，請洽民力運用及訓練科系統管理員。")
+        passwords = get_valid_admin_passwords()
+        if not passwords:
+            st.warning(MAINTENANCE_DISABLED_MESSAGE)
+        else:
+            admin_pass = st.text_input("請輸入管理密碼", type="password")
+            if st.button("🔓 啟用線上維護模式", use_container_width=True):
+                if admin_pass and admin_pass in passwords:
+                    st.session_state["is_admin"] = True
+                    st.session_state["top_main_nav"] = "⚙️ 科內線上維護 (Excel介面)"
+                    st.session_state["active_tab"] = "⚙️ 科內線上維護 (Excel介面)"
+                    set_flash_message("✅ 已切換至科內維護模式！已為您自動開啟【⚙️ 科內線上維護】分頁。", icon="🔓")
+                    st.rerun()
+                else:
+                    st.error("❌ 密碼錯誤，請洽民力運用及訓練科系統管理員。")
     else:
         st.success("🟢 已啟用維護權限（可即時編輯與回覆留言）")
         if st.button("🔒 鎖定 / 退出維護模式", use_container_width=True):

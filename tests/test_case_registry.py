@@ -161,7 +161,7 @@ class RegistryTests(unittest.TestCase):
 
     def test_return_and_resubmit(self):
         no = self.reg.submit(self.unit, sample())
-        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "退回分隊修正"})
+        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "退回分隊修正"}, return_reason="附件不足")
         c = self.reg.get(no)
         self.assertEqual((c.status, cr.pending_for(c)), ("退回分隊修正", cr.ROLE_UNIT))
         self.reg.resubmit(self.unit, no, {"applied": 15000})
@@ -230,6 +230,157 @@ class DraftFromPlanTests(unittest.TestCase):
         self.assertEqual((d["purpose"], d["date_start"], d["total"], d["applied"]), ("設備費", "", 97423, 97423))
         self.assertEqual(d["source_kind"], "議員")
         self.assertIn("議員", d["source_detail"])
+
+
+class WorkflowGuardTests(unittest.TestCase):
+    def setUp(self):
+        self.store = cr.MemoryStore()
+        self.reg = cr.CaseRegistry(self.store, today=date(2026, 10, 27))
+        self.unit = acct(cr.ROLE_UNIT)
+        self.bn = acct(cr.ROLE_BATTALION, "bn", display="邱")
+        self.sec = acct(cr.ROLE_SECTION, "sec", battalion="", unit="災害搶救科")
+        self.admin = acct(cr.ROLE_SECTION, "民力訓練科", battalion="", unit="民力運用及訓練科")
+
+    def test_main_case_sheet_does_not_grow_a_column(self):
+        self.assertEqual(cr.N_COLS, 33)
+        self.assertEqual(cr.FIELDS["case_no"][0], 32)
+        self.assertNotIn("return_reason", cr.FIELDS)
+        self.assertNotIn("退回原因", cr.standard_header_row())
+        self.assertNotIn("失敗次數", cr.standard_header_row())
+
+    def test_section_cannot_skip_battalion_review_but_admin_can_and_is_logged(self):
+        no = self.reg.submit(self.unit, sample(plan_name="初審權限"))
+        other = acct(cr.ROLE_SECTION, "緊急救護科", battalion="", unit="緊急救護科")
+        for who in (self.sec, other):
+            with self.assertRaises(cr.RegistryError) as cm:
+                self.reg.update_stage(who, no, "first_review", {"first_result": "通過"})
+            self.assertIn("所屬大隊", str(cm.exception))
+        self.assertEqual(self.reg.get(no).status, "待大隊初審")
+        self.reg.update_stage(self.admin, no, "first_review", {"first_result": "通過"})
+        self.assertEqual(self.reg.get(no).status, "待業務科收件")
+        self.assertEqual(self.store.read_log()[-1]["來源"], "管理者覆核")
+        self.assertEqual(self.store.read_log()[-1]["帳號"], "民力訓練科")
+
+    def test_battalion_cannot_register_another_battalions_unit(self):
+        bn = acct(cr.ROLE_BATTALION, "台東大隊", battalion="台東大隊", unit="")
+        with self.assertRaises(cr.RegistryError) as cm:
+            self.reg.submit(bn, sample(battalion="關山大隊", unit="池上分隊", plan_name="不該成功"))
+        self.assertIn("不屬於", str(cm.exception))
+        self.assertEqual(self.reg.cases(), [])
+        no = self.reg.submit(bn, sample(battalion="關山大隊", unit="台東分隊", plan_name="自己的分隊"))
+        self.assertEqual(self.reg.get(no)["battalion"], "台東大隊")
+        self.assertTrue(no.startswith("115-台-"))
+        no2 = self.reg.submit(bn, sample(purpose="設備費", date_start="", date_end="", unit="台東大隊",
+                                         battalion="關山大隊", plan_name="大隊自辦"))
+        self.assertEqual((self.reg.get(no2)["battalion"], self.reg.get(no2)["unit"]), ("台東大隊", "台東大隊"))
+
+    def test_return_requires_a_reason_recorded_only_in_the_log(self):
+        no = self.reg.submit(self.unit, sample(plan_name="退回原因"))
+        with self.assertRaises(cr.RegistryError) as cm:
+            self.reg.update_stage(self.bn, no, "first_review", {"first_result": "退回分隊修正"})
+        self.assertIn("退回原因", str(cm.exception))
+        with self.assertRaises(cr.RegistryError):
+            self.reg.update_stage(self.bn, no, "first_review", {"first_result": "退回分隊修正"}, return_reason="   ")
+        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "退回分隊修正"},
+                              return_reason="  金額不符規定  ")
+        self.assertEqual(self.reg.get(no).status, "退回分隊修正")
+        self.assertEqual(self.reg.latest_return_reason(no), "金額不符規定")
+        row = self.store.read_all()[self.reg.get(no).row_no - 1]
+        self.assertNotIn("金額不符規定", "".join(row))
+        log = self.store.read_log()[-1]
+        self.assertIn("退回原因：金額不符規定", log["異動內容"])
+        self.assertTrue(any("金額不符規定" in r["異動內容"] for r in self.reg.visible_log(self.unit)))
+        other = acct(cr.ROLE_UNIT, "東河", battalion="成功大隊", unit="東河分隊")
+        self.assertFalse(any(r.get("案件編號") == no for r in self.reg.visible_log(other)))
+
+    def test_settle_return_also_requires_a_reason(self):
+        no = self._approve("核銷退回")
+        with self.assertRaises(cr.RegistryError):
+            self.reg.update_stage(self.bn, no, "settle_first", {"settle_first_result": "退回分隊修正"})
+        self.reg.update_stage(self.bn, no, "settle_first", {"settle_first_result": "退回分隊修正"},
+                              return_reason="憑證不足")
+        self.assertEqual(self.reg.latest_return_reason(no), "憑證不足")
+        self.assertEqual(self.reg.get(no).status, "核銷退回分隊修正")
+
+    def test_progress_fields_are_choices_and_old_synonyms_still_move(self):
+        no = self._receive("進度選項")
+        with self.assertRaises(cr.RegistryError) as cm:
+            self.reg.update_stage(self.sec, no, "reply", {"approve_status": "隨便寫"})
+        self.assertIn("清單", str(cm.exception))
+        self.reg.update_stage(self.sec, no, "reply", {"approve_status": "核准"})
+        self.assertEqual(self.reg.get(no)["approve_status"], "已核准")
+        self.assertEqual(self.reg.get(no).status, "已核准")
+
+        legacy = self._receive("舊的核准")
+        self.store.write_cells(self.reg.get(legacy).row_no, {cr.FIELDS["approve_status"][0]: "核准"})
+        old = self.reg.get(legacy)
+        self.assertEqual(old["approve_status"], "核准")
+        self.assertEqual((old.status, cr.pending_for(old)), ("已核准", cr.ROLE_BATTALION))
+        self.reg.update_stage(self.bn, legacy, "settle_first", {"settle_first_result": "通過"})
+
+        stuck = self._receive("自由文字")
+        self.store.write_cells(self.reg.get(stuck).row_no, {cr.FIELDS["approve_status"][0]: "縣府審查中"})
+        self.assertEqual(self.reg.get(stuck).status, "縣府審查中")
+        with self.assertRaises(cr.RegistryError):
+            self.reg.update_stage(self.bn, stuck, "settle_first", {"settle_first_result": "通過"})
+        self.reg.update_stage(self.sec, stuck, "reply", {"approve_status": "縣府審查中"})
+        self.assertEqual(self.reg.get(stuck)["approve_status"], "縣府審查中")
+        self.reg.update_stage(self.sec, stuck, "reply", {"approve_status": "已核准"})
+        self.assertEqual(self.reg.get(stuck).status, "已核准")
+
+        self.reg.update_stage(self.bn, no, "settle_first", {"settle_first_result": "通過"})
+        self.reg.update_stage(self.sec, no, "settle_second", {"settle_status": "辦理中"})
+        self.assertEqual(self.reg.get(no).status, "核銷：辦理中")
+        self.reg.update_stage(self.sec, no, "settle_second", {"settle_status": "已函文"})
+        closed = self.reg.get(no)
+        self.assertEqual((closed["settle_status"], closed.status), ("已函發", "已結案"))
+        self.store.write_cells(closed.row_no, {cr.FIELDS["settle_status"][0]: "已函文"})
+        again = self.reg.get(no)
+        self.assertEqual(again.status, "已結案")
+        self.assertIsNone(cr.pending_for(again))
+
+    def test_earlier_stage_locks_once_the_next_one_starts(self):
+        no = self.reg.submit(self.unit, sample(plan_name="還能改初審"))
+        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "通過"})
+        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "退回分隊修正"}, return_reason="補計畫書")
+        self.assertEqual(self.reg.get(no).status, "退回分隊修正")
+
+        locked = self._approve("鎖定後不能改")
+        with self.assertRaises(cr.RegistryError) as cm:
+            self.reg.update_stage(self.bn, locked, "first_review", {"first_result": "退回分隊修正"},
+                                  return_reason="想反悔")
+        self.assertIn("鎖定", str(cm.exception))
+        with self.assertRaises(cr.RegistryError) as cm:
+            self.reg.update_stage(self.sec, locked, "second_review", {"received": False})
+        self.assertIn("鎖定", str(cm.exception))
+        self.assertEqual(self.reg.get(locked)["first_result"], "通過")
+        self.assertTrue(cr._truthy(self.reg.get(locked)["received"]))
+        self.reg.update_stage(self.admin, locked, "second_review", {"received": False})
+        self.assertFalse(cr._truthy(self.reg.get(locked)["received"]))
+        self.assertEqual(self.store.read_log()[-1]["來源"], "管理者覆核")
+        self.reg.update_stage(self.sec, locked, "note", {"note": "補記"})
+        self.assertEqual(self.reg.get(locked)["note"], "補記")
+        self.assertNotEqual(self.store.read_log()[-1]["來源"], "管理者覆核")
+
+    def test_admin_cannot_take_over_another_sections_open_stage(self):
+        no = self._receive("別科進行中")
+        self.assertNotIn(no, [c.case_no for c in self.reg.visible_cases(self.admin)])
+        with self.assertRaises(cr.RegistryError):
+            self.reg.update_stage(self.admin, no, "reply", {"approve_status": "審核中"})
+        self.reg.update_stage(self.admin, no, "first_review", {"first_result": "通過", "first_by": "代核"})
+        self.assertEqual(self.store.read_log()[-1]["來源"], "管理者覆核")
+        self.assertEqual(self.reg.get(no)["first_by"], "代核")
+
+    def _receive(self, name):
+        no = self.reg.submit(self.unit, sample(plan_name=name))
+        self.reg.update_stage(self.bn, no, "first_review", {"first_result": "通過"})
+        self.reg.update_stage(self.sec, no, "second_review", {"received": True, "apply_doc_no": "1"})
+        return no
+
+    def _approve(self, name):
+        no = self._receive(name)
+        self.reg.update_stage(self.sec, no, "reply", {"approve_status": "已核准"})
+        return no
 
 
 if __name__ == "__main__":
