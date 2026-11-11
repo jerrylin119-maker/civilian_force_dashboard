@@ -411,9 +411,7 @@ def _page_password(book, acct):
         st.warning("請先設定新密碼。設定完成前，不能登錄案件、處理案件，也不能使用計畫書產生器。")
     with st.form("case_pw"):
         old = st.text_input("目前的密碼", type="password")
-        new = st.text_input(
-            f"新密碼（至少 {ca.MIN_PASSWORD_LEN} 碼，須含英文字母與數字，且不可與舊密碼或初始密碼相同）",
-            type="password")
+        new = st.text_input("新密碼（不可與初始密碼相同）", type="password")
         new2 = st.text_input("再輸入一次新密碼", type="password")
         go = st.form_submit_button("更改密碼")
     if go:
@@ -436,8 +434,7 @@ def _page_accounts(book, acct):
                "請個別告知對方暫時密碼，不要寫在登入頁或群組公告。對方換完密碼之前不能使用系統。")
     accounts = book.list_accounts()
     pick = st.selectbox("要處理的帳號", accounts, format_func=lambda a: f"{a.battalion} {a.login}".strip())
-    c1, c2 = st.columns(2)
-    if c1.button("重設密碼並要求更改"):
+    if st.button("重設密碼並要求更改"):
         try:
             book.reset_password(acct, pick.login)
         except cr.RegistryError as exc:
@@ -445,17 +442,9 @@ def _page_accounts(book, acct):
             return
         st.success(f"已重設「{pick.login}」。暫時密碼是 {ca.DEFAULT_PASSWORD}。"
                    "請個別告知，不要公開張貼。對方登入後必須先換密碼，換完之前不能使用系統。")
-    if c2.button("解除登入鎖定"):
-        try:
-            book.clear_lock(acct, pick.login)
-        except cr.RegistryError as exc:
-            st.error(str(exc))
-            return
-        st.success(f"已解除「{pick.login}」的登入鎖定，密碼沒有變更。")
     st.dataframe(pd.DataFrame([{
         "帳號": a.login, "角色": cr.ROLE_LABELS[a.role], "所屬大隊": a.battalion,
         "仍須更改密碼": "是" if a.must_change else "",
-        "鎖定至": a.locked_until if book.is_locked(a) else "",
     } for a in accounts]), use_container_width=True, hide_index=True)
 
 

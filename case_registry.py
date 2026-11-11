@@ -153,18 +153,6 @@ def now_text(now=None):
     return f"{n.year}/{n.month}/{n.day} {n:%H:%M:%S}"
 
 
-def parse_local_datetime(text):
-    """解析 now_text 寫進試算表的時間（台灣時區）。解析不了回傳 None。"""
-    m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$", _clean(text))
-    if not m:
-        return None
-    try:
-        return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)),
-                        int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), tzinfo=TZ)
-    except ValueError:
-        return None
-
-
 def normalize_approve_status(value):
     text = _clean(value)
     return APPROVE_SYNONYMS.get(text, text)
@@ -294,9 +282,6 @@ class Account:
     unit: str = ""        # 分隊帳號的單位名稱；科室帳號是科室全名（寫進「承辦科室」欄）
     password_hash: str = ""
     must_change: bool = False   # 還在用初始密碼，或被管理者重設後尚未更換
-    failed_attempts: int = 0
-    failed_at: str = ""
-    locked_until: str = ""
 
     @property
     def label(self):
@@ -681,7 +666,7 @@ class CaseRegistry:
 
     def visible_log(self, account, limit=300):
         """這個帳號看得到的異動紀錄：自己看得到的案件，以及自己的、沒有案件編號的事件。
-        民力訓練科另外看得到所有沒有案件編號的事件（登入鎖定、密碼重設）。"""
+        民力訓練科另外看得到所有沒有案件編號的事件（例如密碼重設）。"""
         seen = {c.case_no for c in self.visible_cases(account)}
         out = []
         for row in self.store.read_log(limit):

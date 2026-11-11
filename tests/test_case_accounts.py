@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -63,17 +63,17 @@ class AccountTests(unittest.TestCase):
     def test_change_password(self):
         with self.assertRaises(cr.RegistryError):
             self.book.change_password("成功分隊", "錯的", "abcdef")
-        for bad in ("0000", "123", "0000"):
+        for bad in ("", "   ", "0000"):
             with self.assertRaises(cr.RegistryError):
                 self.book.change_password("成功分隊", "0000", bad)
-        self.book.change_password("成功分隊", "0000", "newpass1")
+        self.book.change_password("成功分隊", "0000", "123")
         self.assertIsNone(self.book.authenticate("成功分隊", "0000"))
-        a = self.book.authenticate("成功分隊", "newpass1")
+        a = self.book.authenticate("成功分隊", "123")
         self.assertFalse(a.must_change)
         self.assertTrue(self.book.authenticate("東河分隊", "0000"))      # 其他帳號不受影響
 
     def test_reset_password_only_by_admin(self):
-        self.book.change_password("成功分隊", "0000", "newpass1")
+        self.book.change_password("成功分隊", "0000", "123")
         with self.assertRaises(cr.RegistryError):
             self.book.reset_password(self.book.authenticate("緊急救護科", "0000"), "成功分隊")
         with self.assertRaises(cr.RegistryError):
@@ -81,23 +81,23 @@ class AccountTests(unittest.TestCase):
         self.book.reset_password(self.book.authenticate("民力訓練科", "0000"), "成功分隊")
         a = self.book.authenticate("成功分隊", "0000")
         self.assertTrue(a and a.must_change)
-        self.assertIsNone(self.book.authenticate("成功分隊", "newpass1"))
+        self.assertIsNone(self.book.authenticate("成功分隊", "123"))
 
     def test_list_accounts_order(self):
         names = [a.login for a in self.book.list_accounts()]
         self.assertEqual(names[0], "民力訓練科")
         self.assertEqual(len(names), 37)
 
-    def test_password_must_be_stronger_than_the_default(self):
-        for bad in ("0000", "12345678", "abcdefgh"):
+    def test_new_password_only_rejects_empty_and_initial(self):
+        for bad in ("", "   ", "0000", " 0000 "):
             with self.assertRaises(cr.RegistryError):
                 self.book.change_password("長濱分隊", "0000", bad)
-        self.book.change_password("長濱分隊", "0000", "abcd1234")
-        self.assertIsNone(self.book.authenticate("長濱分隊", "0000"))
-        changed = self.book.authenticate("長濱分隊", "abcd1234")
+        self.book.change_password("長濱分隊", "0000", "1")
+        self.assertIsNotNone(self.book.authenticate("長濱分隊", "1"))
+        self.book.change_password("長濱分隊", "1", "abcdefgh")
+        changed = self.book.authenticate("長濱分隊", "abcdefgh")
         self.assertFalse(changed.must_change)
-        with self.assertRaises(cr.RegistryError):
-            self.book.change_password("長濱分隊", "abcd1234", "abcd1234")
+        self.assertIsNone(self.book.authenticate("長濱分隊", "1"))
 
     def test_default_password_cannot_use_the_system_until_changed(self):
         reg = cr.CaseRegistry(self.store, today=date(2026, 11, 11))
@@ -121,71 +121,19 @@ class AccountTests(unittest.TestCase):
         self.assertTrue(acct.must_change)
         self.assertTrue(self.book.load()[ca.norm_login("金峰分隊")].must_change)
 
-    def test_lockout_is_stored_per_account_and_expires(self):
-        now = datetime(2026, 11, 11, 9, 0, tzinfo=cr.TZ)
-        for _ in range(4):
-            _acct, err = self.book.login("成功分隊", "wrong", now=now)
-            self.assertIsNone(_acct)
-            self.assertNotIn("鎖定", err)
-        _acct, err = self.book.login("成功分隊", "wrong", now=now)
-        self.assertIn("暫時鎖定", err)
-        fresh = ca.AccountBook(self.store)   # 換一個工作階段、重新整理
-        _acct, err = fresh.login("成功分隊", "0000", now=now + timedelta(minutes=1))
-        self.assertIsNone(_acct)
-        self.assertIn("暫時鎖定", err)
-        for _ in range(8):                    # 鎖定期間再試，不能把解鎖時間往後延
-            fresh.login("成功分隊", "wrong", now=now + timedelta(minutes=10))
-        acct, err = fresh.login("成功分隊", "0000", now=now + timedelta(minutes=ca.LOCK_MINUTES))
-        self.assertIsNotNone(acct)
-        self.assertEqual(err, "")
-        other, err = fresh.login("東河分隊", "0000", now=now)
-        self.assertIsNotNone(other)
-
-    def test_failures_outside_the_window_do_not_add_up(self):
-        start = datetime(2026, 11, 11, 8, 0, tzinfo=cr.TZ)
-        for i in range(4):
-            _acct, err = self.book.login("鹿野分隊", "x", now=start + timedelta(hours=2 * i))
-            self.assertNotIn("鎖定", err)
-        _acct, err = self.book.login("鹿野分隊", "x", now=start + timedelta(hours=10))
-        self.assertNotIn("鎖定", err)
-        acct, err = self.book.login("鹿野分隊", "0000", now=start + timedelta(hours=10, seconds=1))
-        self.assertIsNotNone(acct)
-
-    def test_admin_can_clear_lock_without_resetting_password(self):
-        now = datetime(2026, 11, 11, 9, 0, tzinfo=cr.TZ)
-        for _ in range(5):
-            self.book.login("大武分隊", "x", now=now)
-        self.assertIn("鎖定", self.book.login("大武分隊", "0000", now=now)[1])
-        with self.assertRaises(cr.RegistryError):
-            self.book.clear_lock(self.book.authenticate("緊急救護科", "0000"), "大武分隊")
-        self.book.clear_lock(self.book.authenticate("民力訓練科", "0000"), "大武分隊")
-        acct, err = self.book.login("大武分隊", "0000", now=now)
-        self.assertIsNotNone(acct)
-        self.assertTrue(acct.must_change)
-
-    def test_reset_clears_lock_and_returns_to_must_change(self):
-        now = datetime(2026, 11, 11, 9, 0, tzinfo=cr.TZ)
-        self.book.change_password("太麻里分隊", "0000", "newpass1")
-        for _ in range(5):
-            self.book.login("太麻里分隊", "x", now=now)
-        self.book.reset_password(self.book.authenticate("民力訓練科", "0000"), "太麻里分隊")
-        acct, err = self.book.login("太麻里分隊", "0000", now=now)
-        self.assertIsNotNone(acct)
-        self.assertTrue(acct.must_change)
-        self.assertIsNone(self.book.authenticate("太麻里分隊", "newpass1"))
-
-    def test_old_account_sheet_grows_lock_columns_without_touching_hashes(self):
-        tab = self.store.tabs[ca.ACCOUNT_TAB]
-        old_hash = tab[1][4]
-        self.store.tabs[ca.ACCOUNT_TAB] = [list(r[:7]) for r in tab]
-        self.assertEqual(self.book.ensure_seeded(), 0)
-        header = self.store.tabs[ca.ACCOUNT_TAB][0]
-        self.assertEqual(header[:7], ["帳號", "角色", "所屬大隊", "單位", "密碼雜湊", "需更改密碼", "更新時間"])
-        self.assertEqual(header[7:], ["失敗次數", "最後失敗時間", "鎖定至"])
-        self.assertEqual(self.store.tabs[ca.ACCOUNT_TAB][1][4], old_hash)
-        self.assertEqual(len(self.store.tabs[ca.ACCOUNT_TAB]), 38)
+    def test_wrong_password_does_not_lock_or_add_columns(self):
+        for _ in range(8):
+            acct, err = self.book.login("成功分隊", "wrong")
+            self.assertIsNone(acct)
+            self.assertEqual(err, "帳號或密碼錯誤")
         acct, err = self.book.login("成功分隊", "0000")
         self.assertIsNotNone(acct)
+        self.assertEqual(err, "")
+        header = self.store.read_tab(ca.ACCOUNT_TAB)[0]
+        self.assertEqual(header, ["帳號", "角色", "所屬大隊", "單位", "密碼雜湊", "需更改密碼", "更新時間"])
+        self.assertNotIn("失敗次數", header)
+        self.assertNotIn("最後失敗時間", header)
+        self.assertNotIn("鎖定至", header)
 
     def test_login_box_does_not_list_units_or_publish_the_password(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
