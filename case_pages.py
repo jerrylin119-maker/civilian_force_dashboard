@@ -9,7 +9,8 @@
     [case_registry.service_account]   # 服務帳號 JSON 的內容
     ...
 
-帳號不放在 Secrets：第一次連線時依組織架構在試算表建立「帳號」工作表（預設密碼 0000，只存雜湊）。
+帳號不放在 Secrets：第一次連線時依組織架構在試算表建立「帳號」工作表（只存雜湊）。
+登入頁不列出全部單位，也不公告初始密碼。還沒更換初始密碼的帳號只能先改密碼。
 """
 from __future__ import annotations
 
@@ -20,22 +21,25 @@ import case_accounts as ca
 import case_registry as cr
 
 STAGE_ORDER = ["first_review", "second_review", "reply", "settle_first", "settle_second", "defect", "note"]
-MAX_LOGIN_FAILS = 5
 
 # 各階段畫面欄位：(key, 標籤, 型態, 選項)
+# approve / settle 是固定清單。return_reason 只在退回時必填，寫進異動紀錄，不寫進案件主表。
 STAGE_WIDGETS = {
     "first_review": [("first_result", "審核結果", "select", [""] + cr.FIRST_REVIEW_RESULTS),
-                     ("first_by", "審核人員（留空會填您的名稱）", "text", None)],
+                     ("first_by", "審核人員（留空會填您的名稱）", "text", None),
+                     ("return_reason", "退回原因（選「退回分隊修正」時必填，會顯示給分隊）", "area", None)],
     "second_review": [("received", "已收件", "bool", None), ("section_dept", "承辦科室（改成其他科室＝轉交，轉交後您就看不到這案）", "select",
                                              [""] + list(cr.SECTION_DEPTS)),
                       ("section_officer", "承辦人", "text", None),
                       ("apply_doc_no", "申請補助發文字號（多筆請換行）", "area", None)],
-    "reply": [("approve_status", "補助單位核准進度", "text", None), ("approve_no", "核准案號（或公文文號）", "area", None),
+    "reply": [("approve_status", "補助單位核准進度（要做核銷初審請選「已核准」）", "approve", None),
+              ("approve_no", "核准案號（或公文文號）", "area", None),
               ("approve_amount", "核准金額", "area", None), ("letter_back", "核准函是否回寄分隊", "text", None)],
     "settle_first": [("settle_first_result", "核銷初審結果", "select", [""] + cr.FIRST_REVIEW_RESULTS),
-                     ("settle_first_by", "審核人員（留空會填您的名稱）", "text", None)],
+                     ("settle_first_by", "審核人員（留空會填您的名稱）", "text", None),
+                     ("return_reason", "退回原因（選「退回分隊修正」時必填，會顯示給分隊）", "area", None)],
     "settle_second": [("settle_doc_no", "核銷發文字號", "area", None), ("settle_amount", "核銷金額", "area", None),
-                      ("settle_status", "核銷進度", "text", None)],
+                      ("settle_status", "核銷進度（選「已函發」即結案）", "settle", None)],
     "defect": [("no_defect", "審查無缺失", "bool", None), ("defect", "簡寫缺失", "text", None)],
     "note": [("note", "備註（日期異動等）", "area", None)],
 }
@@ -81,36 +85,20 @@ def is_enabled():
 
 # ---------------------------------------------------------------- 登入
 def _login_box(book):
-    accounts = book.list_accounts()
-    if not accounts:
+    if not book.list_accounts():
         st.error("沒有可用的帳號，請通知管理者。")
         return
     st.markdown("#### 🔐 案件登錄系統登入")
-    fails = st.session_state.get("case_login_fails", 0)
-    if fails >= MAX_LOGIN_FAILS:
-        st.error("登入失敗次數過多，請重新整理頁面後再試。")
-        return
-
-    def label(a):
-        if a.role == cr.ROLE_SECTION:
-            return f"科室｜{a.login}"
-        if a.role == cr.ROLE_BATTALION:
-            return f"大隊｜{a.login}"
-        return f"{a.battalion}　{a.login}"
-
     with st.form("case_login"):
-        pick = st.selectbox("帳號（單位名稱）", accounts, format_func=label)
+        name = st.text_input("帳號（單位名稱）", placeholder="請輸入單位名稱")
         pw = st.text_input("密碼", type="password")
         go = st.form_submit_button("登入")
     if go:
-        acct = book.authenticate(pick.login, pw)
+        acct, err = book.login(name, pw)
         if acct:
             st.session_state["case_user"] = acct
-            st.session_state["case_login_fails"] = 0
             st.rerun()
-        st.session_state["case_login_fails"] = fails + 1
-        st.error("密碼錯誤")
-    st.caption("初次使用的密碼是 0000，登入後請先到「🔑 更改密碼」更新。")
+        st.error(err or "帳號或密碼錯誤")
 
 
 # ---------------------------------------------------------------- 共用
@@ -159,10 +147,13 @@ def _page_new(reg, acct, pg):
     else:
         st.warning("這份資料沒有經過計畫書產生器檢核。建議先用「✏️ 計畫書產生器」製作並通過檢核，再回來登錄。")
     is_unit = acct.role == cr.ROLE_UNIT
+    lock_battalion = acct.role in (cr.ROLE_UNIT, cr.ROLE_BATTALION)
     with st.form(f"case_new_{ver}"):
         bn_list = cr.BATTALIONS
         bn_default = acct.battalion if acct.battalion in bn_list else bn_list[0]
-        battalion = st.selectbox("所屬大隊", bn_list, index=bn_list.index(bn_default), disabled=is_unit)
+        battalion = st.selectbox("所屬大隊", bn_list, index=bn_list.index(bn_default), disabled=lock_battalion)
+        if lock_battalion:
+            st.caption("所屬大隊已鎖定為您登入的大隊，不能改成其他大隊。")
         unit = st.text_input("承辦單位（大隊本身辦理填大隊名稱）",
                              value=acct.unit if is_unit else (data.get("unit", "") or acct.battalion), disabled=is_unit)
         officer = st.text_input("承辦人", value=data.get("officer", ""))
@@ -180,6 +171,10 @@ def _page_new(reg, acct, pg):
                                       value=data.get("source_detail", ""))
         go = st.form_submit_button("送出登錄", type="primary")
     if go:
+        if acct.role in (cr.ROLE_UNIT, cr.ROLE_BATTALION) and acct.battalion:
+            battalion = acct.battalion
+        if is_unit and acct.unit:
+            unit = acct.unit
         try:
             case_no = reg.submit(acct, {
                 "battalion": battalion, "unit": unit, "officer": officer, "purpose": purpose, "plan_name": plan_name,
@@ -200,9 +195,23 @@ def _page_new(reg, acct, pg):
         st.rerun()
 
 
+def _progress_input(label, current, choices, normalize, canonical):
+    opts, start = cr.progress_options(current, choices, normalize)
+    picked = st.selectbox(label, opts, index=opts.index(start) if start in opts else 0,
+                          format_func=lambda v: v or "（尚未填寫）")
+    raw = cr._clean(current)
+    if raw and normalize(raw) == canonical and raw != canonical:
+        st.caption(f"目前試算表記的是「{raw}」，先視同「{canonical}」。按儲存會改寫成「{canonical}」。")
+    elif raw and raw not in choices:
+        st.caption("這是以前自由輸入的內容，不會因此進入下一階段。請改選清單中的項目。")
+    return picked
+
+
 def _stage_form(reg, acct, case, stage, expanded):
     widgets = STAGE_WIDGETS[stage]
     with st.expander(cr.STAGE_LABELS[stage], expanded=expanded):
+        if acct.is_admin and (cr.stage_is_locked(case, stage) or (stage == "first_review" and acct.role != cr.ROLE_BATTALION)):
+            st.caption("您正在以民力訓練科權限修改。儲存後會記入異動紀錄，來源為「管理者覆核」。只改這個階段，不會自動清掉後面已填的欄位。")
         with st.form(f"stage_{stage}_{case.case_no}"):
             vals = {}
             for key, label, kind, opts in widgets:
@@ -210,6 +219,10 @@ def _stage_form(reg, acct, case, stage, expanded):
                 if kind == "select":
                     start = cur or (acct.unit if key == "section_dept" else "")
                     vals[key] = st.selectbox(label, opts, index=opts.index(start) if start in opts else 0)
+                elif kind == "approve":
+                    vals[key] = _progress_input(label, cur, cr.APPROVE_STATUS_CHOICES, cr.normalize_approve_status, "已核准")
+                elif kind == "settle":
+                    vals[key] = _progress_input(label, cur, cr.SETTLE_STATUS_CHOICES, cr.normalize_settle_status, "已函發")
                 elif kind == "bool":
                     vals[key] = st.checkbox(label, value=cr._truthy(cur))
                 elif kind == "area":
@@ -231,8 +244,60 @@ def _stage_form(reg, acct, case, stage, expanded):
             st.rerun()
 
 
+def _show_return_and_history(reg, acct, case):
+    if "退回" in case.status:
+        reason = reg.latest_return_reason(case.case_no)
+        if reason:
+            st.error(f"退回原因：{reason}")
+        else:
+            st.warning("這件案子已退回，但沒有留下退回原因。請直接向大隊確認要修正的地方。")
+    mine = [r for r in reg.visible_log(acct) if r.get("案件編號") == case.case_no]
+    if mine:
+        with st.expander("這件案子的異動紀錄", expanded=("退回" in case.status and acct.role == cr.ROLE_UNIT)):
+            st.dataframe(pd.DataFrame(mine[::-1]), use_container_width=True, hide_index=True)
+
+
+def _stage_readonly(case, stage):
+    lines = []
+    for key, label, kind, _opts in STAGE_WIDGETS[stage]:
+        if key not in cr.FIELDS:
+            continue
+        cur = case[key]
+        if kind == "bool":
+            shown = "是" if cr._truthy(cur) else "否"
+        elif kind == "approve":
+            shown = _progress_text(cur, cr.normalize_approve_status, "已核准")
+        elif kind == "settle":
+            shown = _progress_text(cur, cr.normalize_settle_status, "已函發")
+        else:
+            shown = cur or "—"
+        lines.append(f"- {label.split('（')[0]}：{shown}")
+    with st.expander(cr.STAGE_LABELS[stage] + "（已鎖定）", expanded=False):
+        st.markdown("\n".join(lines))
+        st.caption("後面的階段已經開始，這裡不能再改。如需更正，請洽民力訓練科。")
+
+
+def _progress_text(raw, normalize, canonical):
+    raw = cr._clean(raw)
+    if not raw:
+        return "—"
+    if normalize(raw) == canonical and raw != canonical:
+        return f"{raw}（視同{canonical}）"
+    return raw
+
+
 def _page_handle(reg, acct):
-    cases = _visible(reg, acct)
+    cases = list(_visible(reg, acct))
+    if acct.is_admin:
+        typed = st.text_input("管理者以案件編號開啟", placeholder="例如 115-成-0001",
+                              help="可開啟其他科室已收件的案件，或修改已鎖定的前階段。修改會記入異動紀錄（管理者覆核）。")
+        typed = typed.strip()
+        if cr.CASE_NO_RE.match(typed):
+            found = reg.get(typed)
+            if found is None:
+                st.warning(f"找不到案件 {typed}")
+            elif all(c.case_no != found.case_no for c in cases):
+                cases.append(found)
     if not cases:
         st.info("目前沒有案件。")
         return
@@ -247,6 +312,7 @@ def _page_handle(reg, acct):
                f"活動日期 {case['date_start'] or '—'}～{case['date_end'] or '—'}")
     st.markdown(f"總經費 **{cr.to_int(case['total']):,}** 元｜爭取 **{cr.to_int(case['applied']):,}** 元｜"
                 f"來源 {case['source_detail']}｜目前狀態 **{case.status}**")
+    _show_return_and_history(reg, acct, case)
     if acct.role == cr.ROLE_UNIT:
         if cr.pending_for(case) == cr.ROLE_UNIT:
             _resubmit_form(reg, acct, case)
@@ -258,6 +324,8 @@ def _page_handle(reg, acct):
     for stage in STAGE_ORDER:
         if reg.can_edit(acct, stage, case):
             _stage_form(reg, acct, case, stage, expanded=(stage == current))
+        elif reg.can_edit(acct, stage, case, ignore_lock=True):
+            _stage_readonly(case, stage)
 
 
 def _resubmit_form(reg, acct, case):
@@ -287,10 +355,7 @@ def _resubmit_form(reg, acct, case):
 
 
 def _page_log(reg, acct):
-    rows = reg.store.read_log(300)
-    seen = {c.case_no for c in _visible(reg, acct)}
-    rows = [r for r in rows if r.get("案件編號") in seen
-            or (not r.get("案件編號") and (acct.is_admin or r.get("帳號") == acct.login))]
+    rows = reg.visible_log(acct)
     if not rows:
         st.info("還沒有異動紀錄。")
         return
@@ -318,6 +383,13 @@ def login_gate():
         st.info("使用計畫書產生器要先登入，系統才能帶入您的單位，之後也能直接登錄案件。")
         _login_box(book)
         return True, None
+    if acct.must_change:
+        st.warning("這個帳號還在使用初始密碼，或密碼剛被重設。請先設定新密碼。設定完成前不能使用計畫書產生器與案件登錄。")
+        _page_password(book, acct)
+        if st.button("登出", key="logout_gate"):
+            st.session_state.pop("case_user", None)
+            st.rerun()
+        return True, None
     return True, acct
 
 
@@ -336,10 +408,12 @@ def submit_draft(acct, draft):
 
 def _page_password(book, acct):
     if acct.must_change:
-        st.warning("您還在使用預設密碼 0000，請更新密碼。")
+        st.warning("請先設定新密碼。設定完成前，不能登錄案件、處理案件，也不能使用計畫書產生器。")
     with st.form("case_pw"):
         old = st.text_input("目前的密碼", type="password")
-        new = st.text_input(f"新密碼（至少 {ca.MIN_PASSWORD_LEN} 碼，不可用 0000）", type="password")
+        new = st.text_input(
+            f"新密碼（至少 {ca.MIN_PASSWORD_LEN} 碼，須含英文字母與數字，且不可與舊密碼或初始密碼相同）",
+            type="password")
         new2 = st.text_input("再輸入一次新密碼", type="password")
         go = st.form_submit_button("更改密碼")
     if go:
@@ -351,25 +425,38 @@ def _page_password(book, acct):
         except cr.RegistryError as exc:
             st.error(str(exc))
             return
-        acct.must_change = False
-        st.session_state["case_flash"] = "密碼已更新，下次請用新密碼登入。"
+        fresh = book.authenticate(acct.login, new)
+        st.session_state["case_user"] = fresh or acct
+        st.session_state["case_flash"] = "密碼已更新。"
         st.rerun()
 
 
 def _page_accounts(book, acct):
-    st.caption("忘記密碼的同仁，由您重設回預設密碼 0000。系統只存雜湊，看不到原本的密碼。")
+    st.caption("忘記密碼時，把該帳號重設回必須立即更換的狀態。系統只存雜湊，看不到原本的密碼。"
+               "請個別告知對方暫時密碼，不要寫在登入頁或群組公告。對方換完密碼之前不能使用系統。")
     accounts = book.list_accounts()
-    pick = st.selectbox("要重設的帳號", accounts, format_func=lambda a: f"{a.battalion} {a.login}".strip())
-    if st.button("重設為 0000"):
+    pick = st.selectbox("要處理的帳號", accounts, format_func=lambda a: f"{a.battalion} {a.login}".strip())
+    c1, c2 = st.columns(2)
+    if c1.button("重設密碼並要求更改"):
         try:
             book.reset_password(acct, pick.login)
         except cr.RegistryError as exc:
             st.error(str(exc))
             return
-        st.success(f"已將「{pick.login}」重設為 0000，該帳號下次登入後請同仁自行更改。")
-    st.dataframe(pd.DataFrame([{"帳號": a.login, "角色": cr.ROLE_LABELS[a.role], "所屬大隊": a.battalion,
-                                "仍是預設密碼": "是" if a.must_change else ""} for a in accounts]),
-                 use_container_width=True, hide_index=True)
+        st.success(f"已重設「{pick.login}」。暫時密碼是 {ca.DEFAULT_PASSWORD}。"
+                   "請個別告知，不要公開張貼。對方登入後必須先換密碼，換完之前不能使用系統。")
+    if c2.button("解除登入鎖定"):
+        try:
+            book.clear_lock(acct, pick.login)
+        except cr.RegistryError as exc:
+            st.error(str(exc))
+            return
+        st.success(f"已解除「{pick.login}」的登入鎖定，密碼沒有變更。")
+    st.dataframe(pd.DataFrame([{
+        "帳號": a.login, "角色": cr.ROLE_LABELS[a.role], "所屬大隊": a.battalion,
+        "仍須更改密碼": "是" if a.must_change else "",
+        "鎖定至": a.locked_until if book.is_locked(a) else "",
+    } for a in accounts]), use_container_width=True, hide_index=True)
 
 
 def render_case_registry_page(pg=None):
@@ -401,21 +488,22 @@ def render_case_registry_page(pg=None):
         for k in ("case_user", "case_handoff", "case_nav"):
             st.session_state.pop(k, None)
         st.rerun()
+    _flash()
+    if acct.must_change:
+        st.warning("這個帳號還在使用初始密碼，或密碼剛被重設。請先設定新密碼。設定完成前不能使用其他功能。")
+        _page_password(book, acct)
+        return
     if problems:
         st.error("試算表欄位與系統預期不一致，為避免寫錯欄，已停止寫入：\n\n- " + "\n- ".join(problems[:8]))
         return
     if getattr(reg, "log_failed", False):
         st.warning("異動紀錄寫入失敗，請通知管理者。")
-    _flash()
-    if acct.must_change:
-        st.warning("您還在使用預設密碼 0000，請到「🔑 更改密碼」更新。")
 
     pages = ["📋 案件總表"]
     if acct.role in (cr.ROLE_UNIT, cr.ROLE_BATTALION):
         pages.append("➕ 登錄新案件")
     pages.append("✍️ 處理案件")
-    if acct.role == cr.ROLE_SECTION:
-        pages.append("🧾 異動紀錄")
+    pages.append("🧾 異動紀錄")
     if acct.is_admin:
         pages.append("🔧 帳號管理")
     pages.append("🔑 更改密碼")

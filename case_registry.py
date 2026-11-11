@@ -80,9 +80,10 @@ STAGE_LABELS = {
     "defect": "缺失登記",
 }
 # 哪個角色能編輯哪個階段（大隊的審核只限自己所屬大隊的案件，見 can_edit）
+# ② 申請初審只給該案所屬大隊。民力訓練科可以代為覆核，但必須記入異動紀錄。
 STAGE_ROLES = {
     "submit": {ROLE_UNIT, ROLE_BATTALION},   # 分隊登錄；大隊也可登錄大隊本身的案件
-    "first_review": {ROLE_BATTALION, ROLE_SECTION},
+    "first_review": {ROLE_BATTALION},
     "second_review": {ROLE_SECTION},
     "reply": {ROLE_SECTION, ROLE_BATTALION},
     "settle_first": {ROLE_BATTALION, ROLE_SECTION},
@@ -90,6 +91,8 @@ STAGE_ROLES = {
     "note": {ROLE_BATTALION, ROLE_SECTION},
     "defect": {ROLE_SECTION},
 }
+# 後面階段一有資料，前面階段就鎖定。備註、缺失不在這條線上。
+STAGE_SEQUENCE = ["first_review", "second_review", "reply", "settle_first", "settle_second"]
 # 前一階段要先完成才能進下一階段：階段 -> (欄位, 必須等於)
 STAGE_PREREQ = {
     "second_review": ("first_result", "通過"),
@@ -100,14 +103,20 @@ STAGE_PREREQ = {
 
 BOOL_FIELDS = {"received", "no_defect"}   # 試算表裡存 TRUE / FALSE（勾選方塊）
 
-ADMIN_LOGINS = {"民力訓練科"}   # 只管帳號重設；看不到其他科室承接的案件
+ADMIN_LOGINS = {"民力訓練科"}   # 重設密碼、代為初審、修改已鎖定階段；案件清單仍不包含其他科室已收的案
 # 承辦科室（寫進「承辦科室」欄的全名），需與 case_accounts.SECTIONS 的值一致
 SECTION_DEPTS = ("民力運用及訓練科", "緊急救護科", "資通作業科", "災害搶救科", "預防調查科", "綜合企劃科")
-# 這些階段的資料屬於「承辦科室」，收件後只有該科室（或民力訓練科）能改
+# 這些階段的資料屬於「承辦科室」，收件後只有該科室能改（民力訓練科只在階段已鎖定時能覆核）
 DEPT_STAGES = {"second_review", "reply", "settle_second", "defect"}
 
 FIRST_REVIEW_RESULTS =["通過", "退回分隊修正"]
 PURPOSES = ["設備費", "活動費"]
+# 核准進度、核銷進度改成固定選項，避免自由輸入（例如「核准」「已函文」）讓流程卡住。
+# 空白代表還沒填。既有的自由文字若不是下面的同義詞，會保留原值、不自動推進。
+APPROVE_STATUS_CHOICES = ("", "審核中", "已核准", "未獲補助")
+SETTLE_STATUS_CHOICES = ("", "辦理中", "已函發")
+APPROVE_SYNONYMS = {"已核准": "已核准", "核准": "已核准"}
+SETTLE_SYNONYMS = {"已函發": "已函發", "已函文": "已函發"}
 
 BATTALION_CODES = {
     "台東大隊": "台", "關山大隊": "關", "成功大隊": "成", "大武大隊": "武",
@@ -128,7 +137,7 @@ FIELD_LABELS.update({"first_result": "初審結果", "first_by": "初審人員",
                      "settle_first_by": "核銷初審人員", "settle_doc_no": "核銷發文字號",
                      "apply_doc_no": "申請發文字號", "approve_status": "核准進度", "approve_no": "核准案號",
                      "approve_amount": "核准金額", "letter_back": "核准函回寄", "applied": "爭取經費",
-                     "total": "總經費", "source_detail": "來源細項"})
+                     "total": "總經費", "source_detail": "來源細項", "return_reason": "退回原因"})
 
 
 def _norm_header(text):
@@ -137,7 +146,102 @@ def _norm_header(text):
 
 def now_text(now=None):
     n = now or datetime.now(TZ)
+    if n.tzinfo is None:
+        n = n.replace(tzinfo=TZ)
+    else:
+        n = n.astimezone(TZ)
     return f"{n.year}/{n.month}/{n.day} {n:%H:%M:%S}"
+
+
+def parse_local_datetime(text):
+    """解析 now_text 寫進試算表的時間（台灣時區）。解析不了回傳 None。"""
+    m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$", _clean(text))
+    if not m:
+        return None
+    try:
+        return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                        int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), tzinfo=TZ)
+    except ValueError:
+        return None
+
+
+def normalize_approve_status(value):
+    text = _clean(value)
+    return APPROVE_SYNONYMS.get(text, text)
+
+
+def normalize_settle_status(value):
+    text = _clean(value)
+    return SETTLE_SYNONYMS.get(text, text)
+
+
+def progress_options(current, choices, normalize):
+    """下拉選項。舊的自由文字若不在清單裡，附在最後，避免一打開就把原值弄丟。"""
+    current = _clean(current)
+    opts = list(choices)
+    canon = normalize(current)
+    if current and canon not in opts and current not in opts:
+        opts.append(current)
+    selected = canon if canon in opts else (current if current in opts else "")
+    return opts, selected
+
+
+def _stage_has_progress(case, stage):
+    """這個階段是否已經有人填過。預先放好的 FALSE 勾選方塊不算。"""
+    for key, (_idx, _head, st) in FIELDS.items():
+        if st != stage:
+            continue
+        if key in BOOL_FIELDS:
+            if _truthy(case[key]):
+                return True
+        elif _clean(case[key]):
+            return True
+    return False
+
+
+def stage_is_locked(case, stage):
+    """下一階段已經開始時，這一階段鎖定。備註與缺失不受此限。"""
+    if stage not in STAGE_SEQUENCE or case is None:
+        return False
+    idx = STAGE_SEQUENCE.index(stage)
+    return any(_stage_has_progress(case, later) for later in STAGE_SEQUENCE[idx + 1:])
+
+
+def known_unit_battalion(unit):
+    """分隊名稱對到所屬大隊。不是 27 個分隊之一（例如大隊自己辦）回傳空字串。"""
+    name = _clean(unit).replace("臺", "台").replace(" ", "").replace("　", "")
+    if not name:
+        return ""
+    import case_accounts as accounts
+    for battalion, units in accounts.ORG.items():
+        if name in units:
+            return battalion
+    return ""
+
+
+def _require_password_changed(account):
+    if getattr(account, "must_change", False):
+        raise RegistryError("請先更改密碼後才能使用案件功能")
+
+
+def _admin_override(account, stage, case):
+    """民力訓練科代做初審，或修改已鎖定的前階段。"""
+    if not getattr(account, "is_admin", False):
+        return False
+    return stage == "first_review" or stage_is_locked(case, stage)
+
+
+def _coerce_progress(new, old, choices, normalize, label):
+    """固定選項。同義詞改成標準寫法；舊的自由文字可以原樣留著，但不能改成另一段自由文字。"""
+    new = normalize(_clean(new))
+    old = _clean(old)
+    allowed = set(choices)
+    if old and old not in allowed:
+        allowed.add(old)
+    if new not in allowed:
+        names = "、".join(item for item in choices if item)
+        raise RegistryError(f"「{label}」請從清單選擇（{names}）")
+    return new
 
 
 def date_text(d):
@@ -189,7 +293,10 @@ class Account:
     battalion: str = ""   # 分隊與大隊帳號所屬大隊；科室帳號留空
     unit: str = ""        # 分隊帳號的單位名稱；科室帳號是科室全名（寫進「承辦科室」欄）
     password_hash: str = ""
-    must_change: bool = False   # 還在用預設密碼
+    must_change: bool = False   # 還在用初始密碼，或被管理者重設後尚未更換
+    failed_attempts: int = 0
+    failed_at: str = ""
+    locked_until: str = ""
 
     @property
     def label(self):
@@ -197,7 +304,7 @@ class Account:
 
     @property
     def is_admin(self):
-        """民力訓練科：可處理所有科室的案件、重設帳號密碼。"""
+        """民力訓練科：可重設密碼、代為初審、修改已鎖定的前階段（會記入管理者覆核）。"""
         return self.role == ROLE_SECTION and self.login in ADMIN_LOGINS
 
 
@@ -413,16 +520,21 @@ class Case:
 
 def case_status(case):
     """由各階段欄位推出目前進度（不另存，避免與欄位不一致）。"""
-    if _clean(case["settle_status"]):
-        s = _clean(case["settle_status"])
-        return "已結案" if s == "已函發" else f"核銷：{s}"
+    raw_settle = _clean(case["settle_status"])
+    if raw_settle:
+        if normalize_settle_status(raw_settle) == "已函發":
+            return "已結案"
+        return f"核銷：{raw_settle}"
     r = _clean(case["settle_first_result"])
     if r == "通過":
         return "核銷複審中"
     if r:
         return "核銷退回分隊修正" if "退回" in r else f"核銷初審：{r}"
-    if _clean(case["approve_status"]):
-        return _clean(case["approve_status"])
+    raw_approve = _clean(case["approve_status"])
+    if raw_approve:
+        if normalize_approve_status(raw_approve) == "已核准":
+            return "已核准"
+        return raw_approve
     if _truthy(case["received"]):
         return "申請複審中（已收件）"
     fr = _clean(case["first_result"])
@@ -523,16 +635,27 @@ class CaseRegistry:
         return f"{yy}-{code}-{seq + 1:04d}"
 
     # ---- 權限
-    def can_edit(self, account, stage, case=None):
-        if account.role not in STAGE_ROLES.get(stage, ()):
+    def can_edit(self, account, stage, case=None, ignore_lock=False):
+        if account is None or account.role not in ROLE_LABELS:
+            return False
+        admin = bool(getattr(account, "is_admin", False))
+        locked = stage_is_locked(case, stage)
+        role_ok = account.role in STAGE_ROLES.get(stage, ())
+        if admin and (stage == "first_review" or locked):
+            role_ok = True
+        if not role_ok:
             return False
         if account.role in (ROLE_UNIT, ROLE_BATTALION) and case is not None:
             if account.battalion and case["battalion"] != account.battalion:
                 return False
             if account.role == ROLE_UNIT and account.unit and case["unit"] != account.unit:
                 return False
-        if case is not None and not self.can_view(account, case):
+        if locked and not admin and not ignore_lock:
             return False
+        if case is not None and not self.can_view(account, case):
+            # 清單上看不到其他科室已收的案；管理者仍可用案件編號開啟，但只限初審覆核或修改已鎖定階段
+            if not (admin and (stage == "first_review" or locked)):
+                return False
         return True
 
     def can_view(self, account, case):
@@ -555,6 +678,27 @@ class CaseRegistry:
         if account.role == ROLE_SECTION:
             return self.can_view(account, case)
         return self.can_edit(account, "first_review" if account.role == ROLE_BATTALION else "submit", case)
+
+    def visible_log(self, account, limit=300):
+        """這個帳號看得到的異動紀錄：自己看得到的案件，以及自己的、沒有案件編號的事件。
+        民力訓練科另外看得到所有沒有案件編號的事件（登入鎖定、密碼重設）。"""
+        seen = {c.case_no for c in self.visible_cases(account)}
+        out = []
+        for row in self.store.read_log(limit):
+            case_no = row.get("案件編號") or ""
+            if case_no in seen or (not case_no and (account.is_admin or row.get("帳號") == account.login)):
+                out.append(row)
+        return out
+
+    def latest_return_reason(self, case_no, limit=500):
+        """最近一次退回原因。原因只寫在異動紀錄，不寫進案件主表。"""
+        for row in reversed(self.store.read_log(limit)):
+            if (row.get("案件編號") or "") != case_no:
+                continue
+            match = re.search(r"退回原因：([^；]*)", row.get("異動內容") or "")
+            if match and _clean(match.group(1)):
+                return _clean(match.group(1))
+        return ""
 
     # ---- 登錄
     def validate_submission(self, data):
@@ -588,9 +732,18 @@ class CaseRegistry:
     def submit(self, account, data, source="手動填寫"):
         if not self.can_edit(account, "submit"):
             raise RegistryError("這個帳號不能登錄案件")
+        _require_password_changed(account)
         data = dict(data)
         if account.role == ROLE_UNIT:      # 分隊只能登錄自己單位
-            data["battalion"], data["unit"] = account.battalion or data.get("battalion"), account.unit or data.get("unit")
+            data["battalion"] = account.battalion or data.get("battalion")
+            data["unit"] = account.unit or data.get("unit")
+        elif account.role == ROLE_BATTALION:
+            if not account.battalion:
+                raise RegistryError("這個大隊帳號沒有所屬大隊，無法登錄")
+            data["battalion"] = account.battalion
+            home = known_unit_battalion(data.get("unit"))
+            if home and home != account.battalion:
+                raise RegistryError("承辦單位不屬於您的大隊，不能代其他大隊的分隊登錄")
         errs = self.validate_submission(data)
         if errs:
             raise RegistryError("；".join(errs))
@@ -631,18 +784,36 @@ class CaseRegistry:
         return case_no
 
     # ---- 各階段更新
-    def update_stage(self, account, case_no, stage, changes):
+    def update_stage(self, account, case_no, stage, changes, return_reason=None):
         case = self.get(case_no)
         if case is None:
             raise RegistryError(f"找不到案件 {case_no}")
         if stage == "submit":
             raise RegistryError("登錄資料請用修改功能")
+        changes = dict(changes or {})
+        if return_reason is None and "return_reason" in changes:
+            return_reason = changes.pop("return_reason")
+        else:
+            changes.pop("return_reason", None)
+        admin = bool(getattr(account, "is_admin", False))
+        if stage_is_locked(case, stage) and not admin:
+            raise RegistryError(
+                f"「{STAGE_LABELS.get(stage, stage)}」已鎖定，因為後面的階段已經開始。"
+                "只有民力訓練科可以修改，且會記入異動紀錄。")
         if not self.can_edit(account, stage, case):
+            if stage == "first_review":
+                raise RegistryError("申請初審只能由該案件所屬大隊辦理。民力訓練科代為覆核時會記入異動紀錄。")
             raise RegistryError(f"您的帳號（{ROLE_LABELS[account.role]}）不能編輯「{STAGE_LABELS.get(stage, stage)}」，或這不是您所屬的案件")
+        _require_password_changed(account)
         pre = STAGE_PREREQ.get(stage)
         if pre:
             field_key, need = pre
-            have = _truthy(case[field_key]) if need is True else _clean(case[field_key])
+            if need is True:
+                have = _truthy(case[field_key])
+            elif field_key == "approve_status":
+                have = normalize_approve_status(case[field_key])
+            else:
+                have = _clean(case[field_key])
             if have != need:
                 raise RegistryError(f"「{STAGE_LABELS[stage]}」要等前一階段完成（目前狀態：{case.status}）")
         allowed = {k for k, (_i, _h, s) in FIELDS.items() if s == stage}
@@ -657,6 +828,15 @@ class CaseRegistry:
             if k in BOOL_FIELDS:
                 v = "TRUE" if _truthy(v) else "FALSE"
             clean[k] = _clean(v)
+        if "approve_status" in clean:
+            clean["approve_status"] = _coerce_progress(
+                clean["approve_status"], case["approve_status"], APPROVE_STATUS_CHOICES,
+                normalize_approve_status, "核准進度")
+        if "settle_status" in clean:
+            clean["settle_status"] = _coerce_progress(
+                clean["settle_status"], case["settle_status"], SETTLE_STATUS_CHOICES,
+                normalize_settle_status, "核銷進度")
+        reason = ""
         if stage == "first_review" or stage == "settle_first":
             res_key = "first_result" if stage == "first_review" else "settle_first_result"
             by_key = "first_by" if stage == "first_review" else "settle_first_by"
@@ -664,6 +844,10 @@ class CaseRegistry:
                 raise RegistryError("審核結果只能是「通過」或「退回分隊修正」")
             if clean.get(res_key) and not clean.get(by_key):
                 clean[by_key] = account.label
+            if "退回" in (clean.get(res_key) or ""):
+                reason = _clean(return_reason).replace("；", "、").replace(";", "、")
+                if not reason:
+                    raise RegistryError("退回分隊修正時必須填寫退回原因")
         if stage == "second_review" and clean.get("received") == "TRUE":
             if not clean.get("received_at"):
                 clean["received_at"] = now_text()
@@ -671,15 +855,20 @@ class CaseRegistry:
                 clean["section_dept"] = account.unit
         before = {k: case[k] for k in clean}
         diff = {k: v for k, v in clean.items() if _clean(before[k]) != v}
-        if not diff:
+        log_changes = {k: f"{_clean(before[k])} → {v}" for k, v in diff.items()}
+        if reason:
+            log_changes["return_reason"] = reason
+        if not log_changes:
             return {}
-        problems = self.check_layout()
-        if problems:
-            raise RegistryError("試算表欄位與預期不一致，已停止寫入：" + "；".join(problems[:3]))
-        with self._lock:
-            self.store.write_cells(case.row_no, {FIELDS[k][0]: v for k, v in diff.items()})
-        self._log(account, case_no, stage, {k: f"{_clean(before[k])} → {v}" for k, v in diff.items()})
-        return diff
+        if diff:
+            problems = self.check_layout()
+            if problems:
+                raise RegistryError("試算表欄位與預期不一致，已停止寫入：" + "；".join(problems[:3]))
+            with self._lock:
+                self.store.write_cells(case.row_no, {FIELDS[k][0]: v for k, v in diff.items()})
+        source = "管理者覆核" if _admin_override(account, stage, case) else ""
+        self._log(account, case_no, stage, log_changes, source)
+        return diff or {"return_reason": reason}
 
     def resubmit(self, account, case_no, data):
         """被退回的案件由分隊修正登錄欄位，並清除初審結果讓大隊重審。"""
@@ -688,6 +877,7 @@ class CaseRegistry:
             raise RegistryError(f"找不到案件 {case_no}")
         if not self.can_edit(account, "submit", case):
             raise RegistryError("這不是您的案件")
+        _require_password_changed(account)
         if pending_for(case) != ROLE_UNIT and account.role == ROLE_UNIT:
             raise RegistryError("只有被退回的案件可以修改")
         merged = {k: case[k] for k in FIELDS if FIELDS[k][2] == "submit"}

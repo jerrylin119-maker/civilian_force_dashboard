@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -88,6 +88,117 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(names[0], "民力訓練科")
         self.assertEqual(len(names), 37)
 
+    def test_password_must_be_stronger_than_the_default(self):
+        for bad in ("0000", "12345678", "abcdefgh"):
+            with self.assertRaises(cr.RegistryError):
+                self.book.change_password("長濱分隊", "0000", bad)
+        self.book.change_password("長濱分隊", "0000", "abcd1234")
+        self.assertIsNone(self.book.authenticate("長濱分隊", "0000"))
+        changed = self.book.authenticate("長濱分隊", "abcd1234")
+        self.assertFalse(changed.must_change)
+        with self.assertRaises(cr.RegistryError):
+            self.book.change_password("長濱分隊", "abcd1234", "abcd1234")
+
+    def test_default_password_cannot_use_the_system_until_changed(self):
+        reg = cr.CaseRegistry(self.store, today=date(2026, 11, 11))
+        acct, err = self.book.login("成功分隊", "0000")
+        self.assertEqual(err, "")
+        self.assertTrue(acct.must_change)
+        with self.assertRaises(cr.RegistryError) as cm:
+            reg.submit(acct, sample())
+        self.assertIn("更改密碼", str(cm.exception))
+        self.book.change_password("成功分隊", "0000", "newpass1")
+        ready = self.book.authenticate("成功分隊", "newpass1")
+        no = reg.submit(ready, sample())
+        self.assertTrue(no.startswith("115-成-"))
+
+    def test_login_with_default_password_forces_the_flag_back_on(self):
+        row = self.book._row_no("金峰分隊")
+        self.store.update_tab_cells(ca.ACCOUNT_TAB, row, {ca.COL_MUST: "FALSE"})
+        self.assertFalse(self.book.authenticate("金峰分隊", "0000").must_change)
+        acct, err = self.book.login("金峰分隊", "0000")
+        self.assertEqual(err, "")
+        self.assertTrue(acct.must_change)
+        self.assertTrue(self.book.load()[ca.norm_login("金峰分隊")].must_change)
+
+    def test_lockout_is_stored_per_account_and_expires(self):
+        now = datetime(2026, 11, 11, 9, 0, tzinfo=cr.TZ)
+        for _ in range(4):
+            _acct, err = self.book.login("成功分隊", "wrong", now=now)
+            self.assertIsNone(_acct)
+            self.assertNotIn("鎖定", err)
+        _acct, err = self.book.login("成功分隊", "wrong", now=now)
+        self.assertIn("暫時鎖定", err)
+        fresh = ca.AccountBook(self.store)   # 換一個工作階段、重新整理
+        _acct, err = fresh.login("成功分隊", "0000", now=now + timedelta(minutes=1))
+        self.assertIsNone(_acct)
+        self.assertIn("暫時鎖定", err)
+        for _ in range(8):                    # 鎖定期間再試，不能把解鎖時間往後延
+            fresh.login("成功分隊", "wrong", now=now + timedelta(minutes=10))
+        acct, err = fresh.login("成功分隊", "0000", now=now + timedelta(minutes=ca.LOCK_MINUTES))
+        self.assertIsNotNone(acct)
+        self.assertEqual(err, "")
+        other, err = fresh.login("東河分隊", "0000", now=now)
+        self.assertIsNotNone(other)
+
+    def test_failures_outside_the_window_do_not_add_up(self):
+        start = datetime(2026, 11, 11, 8, 0, tzinfo=cr.TZ)
+        for i in range(4):
+            _acct, err = self.book.login("鹿野分隊", "x", now=start + timedelta(hours=2 * i))
+            self.assertNotIn("鎖定", err)
+        _acct, err = self.book.login("鹿野分隊", "x", now=start + timedelta(hours=10))
+        self.assertNotIn("鎖定", err)
+        acct, err = self.book.login("鹿野分隊", "0000", now=start + timedelta(hours=10, seconds=1))
+        self.assertIsNotNone(acct)
+
+    def test_admin_can_clear_lock_without_resetting_password(self):
+        now = datetime(2026, 11, 11, 9, 0, tzinfo=cr.TZ)
+        for _ in range(5):
+            self.book.login("大武分隊", "x", now=now)
+        self.assertIn("鎖定", self.book.login("大武分隊", "0000", now=now)[1])
+        with self.assertRaises(cr.RegistryError):
+            self.book.clear_lock(self.book.authenticate("緊急救護科", "0000"), "大武分隊")
+        self.book.clear_lock(self.book.authenticate("民力訓練科", "0000"), "大武分隊")
+        acct, err = self.book.login("大武分隊", "0000", now=now)
+        self.assertIsNotNone(acct)
+        self.assertTrue(acct.must_change)
+
+    def test_reset_clears_lock_and_returns_to_must_change(self):
+        now = datetime(2026, 11, 11, 9, 0, tzinfo=cr.TZ)
+        self.book.change_password("太麻里分隊", "0000", "newpass1")
+        for _ in range(5):
+            self.book.login("太麻里分隊", "x", now=now)
+        self.book.reset_password(self.book.authenticate("民力訓練科", "0000"), "太麻里分隊")
+        acct, err = self.book.login("太麻里分隊", "0000", now=now)
+        self.assertIsNotNone(acct)
+        self.assertTrue(acct.must_change)
+        self.assertIsNone(self.book.authenticate("太麻里分隊", "newpass1"))
+
+    def test_old_account_sheet_grows_lock_columns_without_touching_hashes(self):
+        tab = self.store.tabs[ca.ACCOUNT_TAB]
+        old_hash = tab[1][4]
+        self.store.tabs[ca.ACCOUNT_TAB] = [list(r[:7]) for r in tab]
+        self.assertEqual(self.book.ensure_seeded(), 0)
+        header = self.store.tabs[ca.ACCOUNT_TAB][0]
+        self.assertEqual(header[:7], ["帳號", "角色", "所屬大隊", "單位", "密碼雜湊", "需更改密碼", "更新時間"])
+        self.assertEqual(header[7:], ["失敗次數", "最後失敗時間", "鎖定至"])
+        self.assertEqual(self.store.tabs[ca.ACCOUNT_TAB][1][4], old_hash)
+        self.assertEqual(len(self.store.tabs[ca.ACCOUNT_TAB]), 38)
+        acct, err = self.book.login("成功分隊", "0000")
+        self.assertIsNotNone(acct)
+
+    def test_login_box_does_not_list_units_or_publish_the_password(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "case_pages.py"), encoding="utf-8") as fh:
+            text = fh.read()
+        start = text.index("def _login_box")
+        end = text.index("\ndef ", start + 1)
+        body = text[start:end]
+        self.assertNotIn("0000", body)
+        self.assertNotIn("selectbox", body)
+        self.assertNotIn("初次使用", body)
+        self.assertIn("text_input", body)
+
 
 def sample():
     return {"battalion": "成功大隊", "unit": "成功分隊", "officer": "王", "purpose": "活動費",
@@ -100,10 +211,12 @@ class DeptRuleTests(unittest.TestCase):
         self.reg = cr.CaseRegistry(cr.MemoryStore(), today=date(2026, 10, 27))
         self.book = ca.AccountBook(self.reg.store)
         self.book.ensure_seeded()
-        self.unit = self.book.authenticate("成功分隊", "0000")
-        self.bn = self.book.authenticate("成功大隊", "0000")
-        self.civil = self.book.authenticate("民力訓練科", "0000")
-        self.rescue = self.book.authenticate("災害搶救科", "0000")
+        for name in ("成功分隊", "成功大隊", "民力訓練科", "災害搶救科"):
+            self.book.change_password(name, "0000", "newpass1")
+        self.unit = self.book.authenticate("成功分隊", "newpass1")
+        self.bn = self.book.authenticate("成功大隊", "newpass1")
+        self.civil = self.book.authenticate("民力訓練科", "newpass1")
+        self.rescue = self.book.authenticate("災害搶救科", "newpass1")
         self.no = self.reg.submit(self.unit, sample())
         self.reg.update_stage(self.bn, self.no, "first_review", {"first_result": "通過"})
 
@@ -164,7 +277,7 @@ class DeptRuleTests(unittest.TestCase):
         self.assertTrue(self.reg.is_mine(self.civil, c))
         other_unit = self.book.authenticate("東河分隊", "0000")
         no2 = self.reg.submit(self.unit, dict(sample(), plan_name="第二件計畫"))
-        self.reg.update_stage(self.bn, no2, "first_review", {"first_result": "退回分隊修正"})
+        self.reg.update_stage(self.bn, no2, "first_review", {"first_result": "退回分隊修正"}, return_reason="請修正金額")
         self.assertTrue(self.reg.is_mine(self.unit, self.reg.get(no2)))
         self.assertFalse(self.reg.is_mine(other_unit, self.reg.get(no2)))
 
