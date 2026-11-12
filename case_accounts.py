@@ -16,6 +16,11 @@ ACCOUNT_HEADERS = ["帳號", "角色", "所屬大隊", "單位", "密碼雜湊",
 COL_HASH, COL_MUST, COL_UPDATED = 4, 5, 6
 DEFAULT_PASSWORD = "0000"
 
+# 是否強制「還在用初始密碼的帳號先改密碼才能使用」。目前先關閉（所有帳號都能直接使用）；
+# 要啟用時改成 True 即可：試算表「需更改密碼」欄的標記一直保留，啟用後立刻生效，
+# 用初始密碼登入的帳號也會重新被標記。
+FORCE_PASSWORD_CHANGE = False
+
 # 組織架構（臺一律寫成台，與現行表單資料一致）
 ORG = {
     "台東大隊": ["蘭嶼分隊", "綠島分隊", "知本分隊", "卑南分隊", "特種搜救分隊", "南王分隊", "大豐分隊",
@@ -69,7 +74,7 @@ def _account_from_row(row):
     if not _clean(login) or role not in cr.ROLE_LABELS or not _clean(pw_hash):
         return None
     return Account(login=_clean(login), role=role, battalion=_clean(bn), unit=_clean(unit),
-                   password_hash=_clean(pw_hash), must_change=_clean(must).upper() == "TRUE")
+                   password_hash=_clean(pw_hash), must_change=FORCE_PASSWORD_CHANGE and _clean(must).upper() == "TRUE")
 
 
 class AccountBook:
@@ -146,7 +151,7 @@ class AccountBook:
         ok = cr.verify_password(password or "", stored)
         if not (acct and ok):
             return None, "帳號或密碼錯誤"
-        if password == DEFAULT_PASSWORD and not acct.must_change:
+        if FORCE_PASSWORD_CHANGE and password == DEFAULT_PASSWORD and not acct.must_change:
             self._write_account(acct.login, {COL_MUST: "TRUE", COL_UPDATED: cr.now_text()})
             acct = self.load().get(key)
         return acct, ""

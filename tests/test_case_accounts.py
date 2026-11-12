@@ -13,9 +13,25 @@ cr.PBKDF2_ROUNDS = 1000   # 測試用，加快雜湊
 
 class AccountTests(unittest.TestCase):
     def setUp(self):
+        self._force = ca.FORCE_PASSWORD_CHANGE
+        ca.FORCE_PASSWORD_CHANGE = True        # 這個類別測的是「強制改密碼」開啟時的行為
+        self.addCleanup(setattr, ca, "FORCE_PASSWORD_CHANGE", self._force)
         self.store = cr.MemoryStore()
         self.book = ca.AccountBook(self.store)
         self.book.ensure_seeded()
+
+    def test_forced_change_is_off_by_default_and_flags_are_kept(self):
+        """預設關閉：初始密碼的帳號可直接使用；標記留在試算表，重新開啟後立刻生效。"""
+        self.assertFalse(self._force)
+        ca.FORCE_PASSWORD_CHANGE = False
+        acct = self.book.authenticate("成功分隊", "0000")
+        self.assertIsNotNone(acct)
+        self.assertFalse(acct.must_change)
+        self.assertFalse(self.book.load()[ca.norm_login("成功分隊")].must_change)
+        row = [r for r in self.store.read_tab(ca.ACCOUNT_TAB) if r and r[0] == "成功分隊"][0]
+        self.assertEqual(str(row[ca.COL_MUST]).upper(), "TRUE")          # 試算表標記沒被清掉
+        ca.FORCE_PASSWORD_CHANGE = True
+        self.assertTrue(self.book.load()[ca.norm_login("成功分隊")].must_change)
 
     def test_org_counts_and_names(self):
         accts = ca.default_accounts()
