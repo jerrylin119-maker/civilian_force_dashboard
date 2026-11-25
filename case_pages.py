@@ -21,6 +21,7 @@ import streamlit as st
 
 import case_accounts as ca
 import case_registry as cr
+import suggestions as sg
 
 CASE_CACHE_TTL = 45
 
@@ -127,9 +128,11 @@ def render_login_status_bar(can_jump=False):
             pending = reg.action_cases(acct, cached_cases(reg))
         except Exception:
             pending = []
-    left, right = st.columns([5, 1])
+    left, mid, right = st.columns([5, 1.4, 1])
     badge = f"　🔔 {len(pending)} 件待處理" if pending else ""
     left.markdown(f"**👤 目前登入：{_account_label(acct)}**{badge}")
+    mid.button("💡 建議修正", key="case_header_suggest", on_click=_open_suggest,
+               help="用的時候想到可以改進的地方，都可以在這裡提出")
     right.button("登出", key="case_header_logout", on_click=_logout_case_user)
     if not pending:
         return
@@ -143,6 +146,11 @@ def render_login_status_bar(can_jump=False):
 def _open_case_queue():
     st.session_state["top_main_nav"] = "📮 案件登錄"
     st.session_state["case_nav"] = "✍️ 處理案件"
+
+
+def _open_suggest():
+    st.session_state["top_main_nav"] = "📮 案件登錄"
+    st.session_state["case_nav"] = "💡 建議修正"
 
 
 def _login_box(book):
@@ -596,6 +604,180 @@ def _page_accounts(book, acct):
     } for a in accounts]), use_container_width=True, hide_index=True)
 
 
+# ---------------------------------------------------------------- 建議修正
+SUGGEST_CACHE_TTL = 30
+AI_POLISH_LIMIT = 10      # 每個連線最多請 AI 整理幾次
+AI_DIGEST_LIMIT = 5       # 每個連線最多請 AI 彙整幾次
+
+
+def _suggest_config():
+    """Streamlit Secrets：[suggestions] anthropic_api_key = "..."，model 可不填。沒有金鑰時 AI 功能關閉，仍可送出原話。"""
+    try:
+        cfg = st.secrets.get("suggestions")
+    except Exception:
+        return {}
+    return dict(cfg) if cfg else {}
+
+
+def _ai_complete():
+    cfg = _suggest_config()
+    key = str(cfg.get("anthropic_api_key") or "").strip()
+    if not key:
+        return None
+    return sg.make_completer(key, str(cfg.get("model") or "claude-sonnet-5-5"))
+
+
+def _suggest_cache_key(reg):
+    return f"suggest_cache_{id(reg.store)}"
+
+
+def _cached_suggestions(reg):
+    book = sg.SuggestionBook(reg.store)
+    return cr.cached_value(st.session_state, _suggest_cache_key(reg), time.time(), SUGGEST_CACHE_TTL, book.all)
+
+
+def _clear_suggest_form():
+    for k in ("sg_raw", "sg_polished", "sg_t", "sg_p", "sg_r", "sg_i", "sg_u"):
+        st.session_state.pop(k, None)
+
+
+def _page_suggest(reg, acct):
+    st.markdown("#### 💡 建議修正")
+    st.caption("用的時候想到可以改進的地方（操作不順、規定檢查太嚴或漏掉、欄位不好填、說明看不懂…），都可以在這裡提出。"
+               "可以請 AI 幫你整理成清楚的建議，你看過、修改後才會送出；你寫的原話一定會一併保留。管理者會彙整後決定怎麼處理。")
+    book = sg.SuggestionBook(reg.store)
+    complete = _ai_complete()
+
+    screen = st.selectbox("哪個畫面或功能？", sg.SCREENS, key="sg_screen")
+    raw = st.text_area("你的建議（用口語寫就可以）", key="sg_raw", height=130, max_chars=sg.MAX_RAW,
+                       placeholder="例：概算表的便當單價每次都要重打，希望可以記住上次填的")
+    c1, c2, _ = st.columns([1.4, 1.4, 3])
+    if c1.button("🤖 請 AI 幫我整理", disabled=complete is None or len(raw.strip()) < 5, key="sg_ai_btn"):
+        used = st.session_state.get("sg_ai_used", 0)
+        if used >= AI_POLISH_LIMIT:
+            st.warning("這次連線請 AI 整理的次數已達上限，請直接送出原話。")
+        else:
+            st.session_state["sg_ai_used"] = used + 1
+            try:
+                with st.spinner("AI 整理中…"):
+                    res = sg.polish(raw, screen, complete)
+            except sg.SuggestionError as exc:
+                st.error(str(exc))
+                res = None
+            if res is None:
+                st.warning("AI 這次沒有整理成功，請直接送出原話。")
+            else:
+                st.session_state["sg_polished"] = res
+                st.session_state.update({"sg_t": res["title"], "sg_p": res["problem"], "sg_r": res["proposal"],
+                                         "sg_i": res["impact"], "sg_u": res["urgency"]})
+    if complete is None:
+        st.caption("AI 整理功能目前未啟用，可以直接送出原話，管理者看得到。")
+
+    polished = None
+    if st.session_state.get("sg_polished"):
+        st.markdown("**AI 整理結果（可直接修改；以下內容和你的原話一起送出）**")
+        t = st.text_input("標題", key="sg_t")
+        p = st.text_area("問題描述", key="sg_p", height=90)
+        r = st.text_area("建議修正方式", key="sg_r", height=90)
+        i = st.text_input("影響範圍", key="sg_i")
+        u = st.selectbox("急迫程度", sg.URGENCY, key="sg_u")
+        polished = {"title": t, "problem": p, "proposal": r, "impact": i, "urgency": u}
+    label = "✅ 送出整理後的建議" if polished else "送出原話"
+    if c2.button(label, type="primary", disabled=len(raw.strip()) < 5, key="sg_send"):
+        try:
+            no = book.add(acct, screen, raw, polished)
+        except sg.SuggestionError as exc:
+            st.error(str(exc))
+        except Exception as exc:
+            st.error(f"送出失敗（{type(exc).__name__}），請稍後再試或通知管理者。")
+        else:
+            st.session_state.pop(_suggest_cache_key(reg), None)
+            _clear_suggest_form()
+            st.session_state["case_flash"] = f"已送出建議 {no}，謝謝你。管理者處理後會在下面顯示進度。"
+            st.rerun()
+
+    st.markdown("##### 我提出的建議")
+    try:
+        mine = [r for r in _cached_suggestions(reg) if r["帳號"] == acct.login]
+    except Exception as exc:
+        st.warning(f"暫時讀不到建議清單（{type(exc).__name__}）")
+        mine = []
+    if mine:
+        st.dataframe(pd.DataFrame([{
+            "編號": r["編號"], "畫面": r["畫面"], "標題": r["整理後標題"] or r["原始建議"][:24],
+            "狀態": r["狀態"], "管理者回覆": r["管理者回覆"]} for r in mine[::-1]]),
+            use_container_width=True, hide_index=True)
+    else:
+        st.caption("你還沒有提出過建議。")
+
+    if acct.is_admin:
+        _suggest_admin(reg, acct, book, complete)
+
+
+def _suggest_admin(reg, acct, book, complete):
+    st.divider()
+    st.markdown("#### 🔧 管理者：建議彙整與處理")
+    try:
+        rows = _cached_suggestions(reg)
+    except Exception as exc:
+        st.warning(f"暫時讀不到建議清單（{type(exc).__name__}）")
+        return
+    if not rows:
+        st.info("目前還沒有人提出建議。")
+        return
+    counts = {s: sum(1 for r in rows if r["狀態"] == s) for s in sg.STATUSES}
+    st.caption("　".join(f"{s} {n}" for s, n in counts.items()))
+    pick = st.multiselect("篩選狀態", sg.STATUSES, default=list(sg.OPEN_STATUSES), key="sg_filter")
+    show = [r for r in rows if r["狀態"] in pick]
+    st.dataframe(pd.DataFrame([{
+        "編號": r["編號"], "時間": r["提出時間"], "單位": r["單位"], "畫面": r["畫面"],
+        "標題": r["整理後標題"] or r["原始建議"][:24], "急迫": r["急迫程度"], "狀態": r["狀態"],
+    } for r in show[::-1]]), use_container_width=True, hide_index=True)
+
+    st.markdown("**🤖 AI 彙整**（只整理成參考，採納與否由你決定）")
+    open_rows = [r for r in rows if r["狀態"] in sg.OPEN_STATUSES]
+    if complete is None:
+        st.caption("AI 功能未啟用（Secrets 沒有設定金鑰）。可以先篩選、手動處理。")
+    elif st.button(f"彙整目前待處理與討論中的 {len(open_rows)} 筆建議", disabled=not open_rows, key="sg_digest_btn"):
+        used = st.session_state.get("sg_digest_used", 0)
+        if used >= AI_DIGEST_LIMIT:
+            st.warning("這次連線的彙整次數已達上限。")
+        else:
+            st.session_state["sg_digest_used"] = used + 1
+            try:
+                with st.spinner("AI 彙整中…"):
+                    st.session_state["sg_digest"] = sg.digest(open_rows, complete)
+            except sg.SuggestionError as exc:
+                st.error(str(exc))
+    if st.session_state.get("sg_digest"):
+        st.markdown(st.session_state["sg_digest"])
+        st.download_button("下載彙整（文字檔）", st.session_state["sg_digest"], file_name="建議修正彙整.txt",
+                           key="sg_digest_dl")
+
+    st.markdown("**處理單筆建議**")
+    ids = [r["編號"] for r in rows[::-1]]
+    sel = st.selectbox("選擇編號", ids, key="sg_sel")
+    cur = next(r for r in rows if r["編號"] == sel)
+    st.markdown(f"**{cur['整理後標題'] or '（未經 AI 整理）'}**｜{cur['單位']}｜{cur['畫面']}｜急迫：{cur['急迫程度'] or '未評'}")
+    st.text(f"原話：{cur['原始建議']}")
+    if cur["問題描述"]:
+        st.text(f"問題描述：{cur['問題描述']}\n建議修正：{cur['建議修正方式']}\n影響範圍：{cur['影響範圍']}")
+    with st.form("sg_update"):
+        status = st.selectbox("狀態", sg.STATUSES,
+                              index=sg.STATUSES.index(cur["狀態"]) if cur["狀態"] in sg.STATUSES else 0)
+        reply = st.text_area("回覆（提出的人看得到；不採納時必填）", value=cur["管理者回覆"])
+        go = st.form_submit_button("儲存")
+    if go:
+        try:
+            book.update(acct, sel, status, reply)
+        except sg.SuggestionError as exc:
+            st.error(str(exc))
+        else:
+            st.session_state.pop(_suggest_cache_key(reg), None)
+            st.session_state["case_flash"] = f"已更新 {sel}。"
+            st.rerun()
+
+
 def render_case_registry_page(pg=None):
     cfg = get_config()
     st.markdown("### 📮 案件登錄與管制")
@@ -641,6 +823,7 @@ def render_case_registry_page(pg=None):
         pages.append("➕ 登錄新案件")
     pages.append("✍️ 處理案件")
     pages.append("🧾 異動紀錄")
+    pages.append("💡 建議修正")
     if acct.is_admin:
         pages.append("🔧 帳號管理")
     pages.append("🔑 更改密碼")
@@ -655,6 +838,8 @@ def render_case_registry_page(pg=None):
         _page_handle(reg, acct)
     elif nav == "🧾 異動紀錄":
         _page_log(reg, acct)
+    elif nav == "💡 建議修正":
+        _page_suggest(reg, acct)
     elif nav == "🔧 帳號管理":
         _page_accounts(book, acct)
     else:
